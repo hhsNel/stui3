@@ -1,0 +1,131 @@
+set ::timeout 5
+
+set ::_pass 0
+set ::_fail 0
+set ::_hid_stack {}
+
+proc pass {desc} {
+	incr ::_pass
+	puts "PASS: $desc"
+}
+
+proc fail {desc {got ""}} {
+	incr ::_fail
+	if {$got ne ""} {
+		puts "FAIL: $desc (got: [string trim $got])"
+	} else {
+		puts "FAIL: $desc"
+	}
+}
+
+proc summarise {} {
+	set total [expr {$::_pass + $::_fail}]
+	puts "---"
+	puts "Results: $::_pass/$total passed"
+	if {$::_fail > 0} { exit 1 }
+}
+
+proc harness_start {} {
+	if {![file executable $::HARNESS]} {
+		error "Harness binary not found or not executable: $::HARNESS"
+	}
+	spawn $::HARNESS
+	set ::hid $spawn_id
+	set ::_hid_stack [list $::hid]
+	expect -i $::hid \
+		-re "READY\r?\n" {} \
+		timeout { error "harness_start: harness did not become ready" }
+	return $::hid
+}
+
+proc harness_push {} {
+	if {![file executable $::HARNESS]} {
+		error "Harness binary not found or not executable: $::HARNESS"
+	}
+	spawn $::HARNESS
+	set hid $spawn_id
+	expect -i $hid \
+		-re "READY\r?\n" {} \
+		timeout { error "harness_push: harness did not become ready" }
+	lappend ::_hid_stack $hid
+	set ::hid $hid
+	return $hid
+}
+
+proc harness_pop {} {
+	if {[llength $::_hid_stack] <= 1} {
+		error "harness_pop: stack underflow — use harness_stop to end the last process"
+	}
+	catch { send -i $::hid "quit\n" }
+	expect -i $::hid eof
+	set ::_hid_stack [lrange $::_hid_stack 0 end-1]
+	set ::hid [lindex $::_hid_stack end]
+}
+
+proc harness_cycle {} {
+	if {[llength $::_hid_stack] < 2} {
+		error "harness_cycle: need at least 2 processes on the stack"
+	}
+	set idx [lsearch -exact $::_hid_stack $::hid]
+	set next [expr {($idx + 1) % [llength $::_hid_stack]}]
+	set ::hid [lindex $::_hid_stack $next]
+}
+
+proc harness_cmd {cmd} {
+	send -i $::hid "$cmd\n"
+	expect -i $::hid \
+		"$cmd\r\n" {} \
+		"$cmd\n"  {} \
+		timeout { error "harness_cmd timed out waiting for echo of: $cmd" }
+	expect -i $::hid \
+		-re "(\[^\r\n]+)\r?\n" { return [string trim $expect_out(1,string)] } \
+		timeout { error "harness_cmd timed out waiting for reply to: $cmd" }
+}
+
+proc harness_stop {} {
+	catch { send -i $::hid "quit\n" }
+	expect -i $::hid eof
+	set ::_hid_stack {}
+	set ::hid ""
+}
+
+proc assert_ok {desc cmd} {
+	set reply [harness_cmd $cmd]
+	if {[string match "OK*" $reply]} {
+		pass $desc
+	} else {
+		fail $desc $reply
+	}
+	return $reply
+}
+
+proc assert_err {desc cmd} {
+	set reply [harness_cmd $cmd]
+	if {[string match "ERR*" $reply]} {
+		pass $desc
+	} else {
+		fail $desc $reply
+	}
+	return $reply
+}
+
+proc assert_eq {desc cmd expected} {
+	set reply [harness_cmd $cmd]
+	if {$reply eq $expected} {
+		pass $desc
+	} else {
+		fail "$desc (expected: $expected)" $reply
+	}
+	return $reply
+}
+
+proc assert_match {desc cmd pattern} {
+	set reply [harness_cmd $cmd]
+	if {[string match $pattern $reply]} {
+		pass $desc
+	} else {
+		fail "$desc (pattern: $pattern)" $reply
+	}
+	return $reply
+}
+

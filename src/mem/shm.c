@@ -112,19 +112,19 @@ mem_shm_unmap(int is_parent, struct mem_shm_data *const msd)
 	res = STUI_OK;
 
 	if(msd->fd < 0 || !msd->base || !msd->mapped_size) {
-		return STUI_EOORDR;
+		res = STUI_EOORDR;
 	}
 
-	if(munmap(msd->base, msd->mapped_size) < 0) {
+	if(msd->base && munmap(msd->base, msd->mapped_size) < 0) {
 		res = STUI_EUPERR;
 	}
 
-	if(close(msd->fd) < 0) {
+	if(msd->fd >= 0 && close(msd->fd) < 0) {
 		res = STUI_EUPERR;
 	}
 
 	if(is_parent) {
-		if(shm_unlink(msd->fname) < 0) {
+		if(msd->fd >= 0 && shm_unlink(msd->fname) < 0) {
 			res = STUI_EUPERR;
 		}
 	}

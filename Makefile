@@ -13,6 +13,11 @@ OBJDIR        := build/obj
 STATIC_OBJDIR := $(OBJDIR)/static
 PIC_OBJDIR    := $(OBJDIR)/pie
 LIBDIR_OUT    := build/lib
+TESTDIR       := tests
+HARNESSDIR    := $(TESTDIR)/harness
+TEST_BINDIR   := build/tests/harness
+DRIVER_SRCS   := $(wildcard $(HARNESSDIR)/*.c)
+DRIVER_BINS   := $(patsubst $(HARNESSDIR)/%.c, $(TEST_BINDIR)/%, $(DRIVER_SRCS))
 
 MEM_SHM           ?= 1
 MEM_LOCAL         ?= 0
@@ -44,6 +49,7 @@ else
 endif
 
 CORE_SRCS := \
+			 # TODO
 #    $(SRCDIR)/core/window.c       \
 #    $(SRCDIR)/core/element.c      \
 #    $(SRCDIR)/core/container.c    \
@@ -59,7 +65,9 @@ else
   CFLAGS += -DSTUI_REPL_MODE=0
 endif
 
-MEM_SRCS := $(SRCDIR)/mem/mem.c
+#MEM_SRCS := $(SRCDIR)/mem/mem.c
+# TODO
+MEM_SRCS := 
 
 ifeq ($(MEM_SHM),1)
   CFLAGS += -DMEM_BACKEND_SHM=1
@@ -81,7 +89,9 @@ ifeq ($(MEM_ANY),)
   $(error No memory backend selected)
 endif
 
-AGFX_SRCS := $(SRCDIR)/agfx/agfx.c
+#AGFX_SRCS := $(SRCDIR)/agfx/agfx.c
+# TODO
+AGFX_SRCS := 
 
 ifeq ($(AGFX_UNICODE),1)
   CFLAGS += -DAGFX_BACKEND_UNICODE=1
@@ -92,7 +102,8 @@ endif
 
 ifeq ($(AGFX_ASCII),1)
   CFLAGS += -DAGFX_BACKEND_ASCII=1
-  AGFX_SRCS += $(SRCDIR)/agfx/backend_ascii.c
+  # TODO
+  #AGFX_SRCS += $(SRCDIR)/agfx/backend_ascii.c
 else
   CFLAGS += -DAGFX_BACKEND_ASCII=0
 endif
@@ -132,11 +143,14 @@ ifeq ($(AGFX_ANY),)
   $(error No AGFX backend selected)
 endif
 
-INPUT_SRCS := $(SRCDIR)/input/input.c
+#INPUT_SRCS := $(SRCDIR)/input/input.c
+# TODO
+INPUT_SRCS := 
 
 ifeq ($(INPUT_STDIN),1)
   CFLAGS += -DINPUT_BACKEND_STDIN=1
-  INPUT_SRCS += $(SRCDIR)/input/backend_stdin.c
+  # TODO
+  #INPUT_SRCS += $(SRCDIR)/input/backend_stdin.c
 else
   CFLAGS += -DINPUT_BACKEND_STDIN=0
 endif
@@ -172,15 +186,15 @@ ALL_SRCS := $(CORE_SRCS) $(MEM_SRCS) $(AGFX_SRCS) $(INPUT_SRCS)
 ALL_STATIC_OBJS := $(patsubst $(SRCDIR)/%.c, $(STATIC_OBJDIR)/%.o, $(ALL_SRCS))
 ALL_PIC_OBJS := $(patsubst $(SRCDIR)/%.c, $(PIC_OBJDIR)/%.o, $(ALL_SRCS))
 
-LIB_STATIC := $(LIBDIR_OUT)/libstui3.a
-LIB_SHARED := $(LIBDIR_OUT)/libstui3.so
+LIB_STATIC := $(LIBDIR_OUT)/libstui.a
+LIB_SHARED := $(LIBDIR_OUT)/libstui.so
 
 ALL_TARGETS := $(LIB_STATIC)
 ifeq ($(SHARED),1)
   ALL_TARGETS += $(LIB_SHARED)
 endif
 
-.PHONY: all clean install uninstall info help
+.PHONY: all clean install uninstall info help check
 
 all: $(ALL_TARGETS)
 
@@ -204,9 +218,26 @@ $(PIC_OBJDIR)/%.o: $(SRCDIR)/%.c
 	$(CC) $(CFLAGS) -fPIC -c -o $@ $<
 # @echo "  CC   $@ (PIC)"
 
+$(TEST_BINDIR)/%: $(HARNESSDIR)/%.c $(LIB_STATIC)
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -o $@ $< -L$(LIBDIR_OUT) -lstui $(LIBS)
+
+check: $(DRIVER_BINS)
+	@echo "-=================== TESTS ===================-"
+	@failed=0; \
+	for f in $(TESTDIR)/test_*.exp; do \
+	    echo "  RUN  $$f"; \
+	    expect $$f || failed=$$((failed+1)); \
+	done; \
+	if [ $$failed -eq 0 ]; then \
+		echo "-================ ALL PASSED =================-"; \
+	else \
+		echo "-=============== $$failed FAILED ================-"; \
+	fi
+
 install: $(ALL_TARGETS)
-	$(INSTALL) -d $(DESTDIR)$(INCDIR)/stui3
-	$(INSTALL) -m 644 $(INCPATH)/stui3/*.h $(DESTDIR)$(INCDIR)/stui3/
+	$(INSTALL) -d $(DESTDIR)$(INCDIR)/stui
+	$(INSTALL) -m 644 $(INCPATH)/stui/*.h $(DESTDIR)$(INCDIR)/stui/
 	$(INSTALL) -d $(DESTDIR)$(LIBDIR)
 	$(INSTALL) -m 644 $(LIB_STATIC) $(DESTDIR)$(LIBDIR)/
 ifeq ($(SHARED),1)
@@ -214,16 +245,16 @@ ifeq ($(SHARED),1)
 endif
 
 uninstall:
-	rm -rf  $(DESTDIR)$(INCDIR)/stui3
-	rm -f   $(DESTDIR)$(LIBDIR)/libstui3.a
-	rm -f   $(DESTDIR)$(LIBDIR)/libstui3.so
+	rm -rf  $(DESTDIR)$(INCDIR)/stui
+	rm -f   $(DESTDIR)$(LIBDIR)/libstui.a
+	rm -f   $(DESTDIR)$(LIBDIR)/libstui.so
 
 clean:
 	rm -rf build/
 
 info:
 	@echo "========================================"
-	@echo "  stui3 build configuration"
+	@echo "  stui build configuration"
 	@echo "========================================"
 	@echo "  CC              = $(CC)"
 	@echo "  CFLAGS          = $(CFLAGS)"
@@ -288,7 +319,7 @@ help:
 	@echo "Build knobs:"
 	@echo "  REPL_MODE                 also build support for REPL mode       [0]"
 	@echo "  DEBUG=1                   -g3 + ASan/UBSan                       [0]"
-	@echo "  SHARED=1                  also build libstui3.so                 [0]"
+	@echo "  SHARED=1                  also build libstui.so                  [0]"
 	@echo "  PREFIX=/path              install prefix                         [/usr/local]"
 	@echo ""
 	@echo "Persistent overrides: create config.mk alongside this Makefile."
