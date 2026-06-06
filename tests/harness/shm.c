@@ -79,7 +79,7 @@ int main(void)
 			} else if (!msd.base || offset >= msd.mapped_size) {
 				printf("ERR OUT_OF_BOUNDS\n");
 			} else {
-				((unsigned char *)msd.base)[offset] = (unsigned char)byte;
+				*(unsigned char *)mem_shm_derefu(offset, &msd) = (unsigned char)byte;
 				printf("OK\n");
 			}
 
@@ -88,7 +88,7 @@ int main(void)
 			if (!msd.base || offset >= msd.mapped_size) {
 				printf("ERR OUT_OF_BOUNDS\n");
 			} else {
-				printf("OK %u\n", (unsigned int)((unsigned char *)msd.base)[offset]);
+				printf("OK %u\n", *(unsigned char *)mem_shm_derefu(offset, &msd));
 			}
 
 		} else if (strcmp(line, "state") == 0) {

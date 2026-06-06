@@ -15,7 +15,7 @@ mem_caps()
 }
 
 stui_result
-mem_init(char const name[static STUI_NAME_REQUEST_SIZE], uint32_t const flags, struct mem_data *const md, int *const is_parent)
+mem_init(char const name[static STUI_NAME_REQUEST_SIZE], uint32_t const flags, md_t *const md, int *const is_parent)
 {
 	stui_result res;
 
@@ -49,7 +49,7 @@ mem_init(char const name[static STUI_NAME_REQUEST_SIZE], uint32_t const flags, s
 }
 
 stui_result
-mem_map(size_t const size, struct mem_data *const md)
+mem_map(size_t const size, md_t *const md)
 {
 	if(size == 0) {
 		return STUI_EINVAL;
@@ -73,7 +73,7 @@ mem_map(size_t const size, struct mem_data *const md)
 }
 
 stui_result
-mem_remap(size_t const new_size, struct mem_data *const md)
+mem_remap(size_t const new_size, md_t *const md)
 {
 	if(new_size == 0) {
 		return STUI_EINVAL;
@@ -97,7 +97,7 @@ mem_remap(size_t const new_size, struct mem_data *const md)
 }
 
 stui_result
-mem_unmap(struct mem_data *const md)
+mem_unmap(md_t *const md)
 {
 	switch(md->mode) {
 	case MEM_MODE_NONE:

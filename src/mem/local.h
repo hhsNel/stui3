@@ -18,5 +18,16 @@ stui_result mem_local_remap(size_t const new_size, struct mem_local_data *const 
 
 stui_result mem_local_unmap(struct mem_local_data *const mld);
 
+static inline void *
+mem_local_derefu(size_t off, struct mem_local_data const *const mld) {
+	return (char *)mld->base + off;
+}
+
+static inline void *
+mem_local_derefc(size_t off, struct mem_local_data const *const mld) {
+	if(/*off < 0 ||*/ off >= mld->mapped_size) return NULL;
+	return mem_local_derefu(off, mld);
+}
+
 #endif
 
