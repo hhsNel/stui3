@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 #include "stui.h"
+#include "stui-errno.h"
 
 struct mem_local_data {
 	void *base;
@@ -25,7 +26,10 @@ mem_local_derefu(size_t off, struct mem_local_data const *const mld) {
 
 static inline void *
 mem_local_derefc(size_t off, struct mem_local_data const *const mld) {
-	if(/*off < 0 ||*/ off >= mld->mapped_size) return NULL;
+	if(off >= mld->mapped_size) {
+		stui_errno = STUI_EINVAL;
+		return NULL;
+	}
 	return mem_local_derefu(off, mld);
 }
 

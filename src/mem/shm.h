@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 #include "stui.h"
+#include "stui-errno.h"
 
 #define SHM_PREFIX "/stui-"
 
@@ -29,7 +30,10 @@ mem_shm_derefu(size_t off, struct mem_shm_data const *const msd) {
 
 static inline void *
 mem_shm_derefc(size_t off, struct mem_shm_data const *const msd) {
-	if(/*off < 0 ||*/ off >= msd->mapped_size) return NULL;
+	if(off >= msd->mapped_size) {
+		stui_errno = STUI_EINVAL;
+		return NULL;
+	}
 	return mem_shm_derefu(off, msd);
 }
 

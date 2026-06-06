@@ -49,7 +49,7 @@ else
 endif
 
 CORE_SRCS := \
-			 # TODO
+	$(SRCDIR)/stui-errno.c \
 #    $(SRCDIR)/core/window.c       \
 #    $(SRCDIR)/core/element.c      \
 #    $(SRCDIR)/core/container.c    \
@@ -57,6 +57,7 @@ CORE_SRCS := \
 #    $(SRCDIR)/core/event.c        \
 #    $(SRCDIR)/core/render.c       \
 #    $(SRCDIR)/core/utf8.c
+# TODO
 
 ifeq ($(REPL_MODE),1)
   CFLAGS += -DSTUI_REPL_MODE=1
