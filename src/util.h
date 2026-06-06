@@ -27,5 +27,19 @@
 #define MESSAGE(MSG)
 #endif
 
+#if ((COMPILER_CLANG) || (COMPILER_GCC))
+#define ALIGNOF(T) __alignof__(T)
+#else
+#include <stddef.h>
+#define ALIGNOF(T) offsetof(struct { char c; T member; }, member)
+#endif
+
+typedef union {
+	char str[8];
+	uint64_t num;
+} magic_id;
+
+#define TO_MAGIC_ID(STR) ((magic_id){.str={STR[0],STR[1],STR[2],STR[3],STR[4],STR[5],STR[6],STR[7]}})
+
 #endif
 
