@@ -65,9 +65,7 @@ else
   CFLAGS += -DSTUI_REPL_MODE=0
 endif
 
-#MEM_SRCS := $(SRCDIR)/mem/mem.c
-# TODO
-MEM_SRCS := 
+MEM_SRCS := $(SRCDIR)/mem/mem.c
 
 ifeq ($(MEM_SHM),1)
   CFLAGS += -DMEM_BACKEND_SHM=1

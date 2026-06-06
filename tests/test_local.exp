@@ -1,0 +1,142 @@
+#!/usr/bin/env expect
+
+set ::HARNESS [file join [file dirname [info script]] ../build/tests/harness/local]
+source [file join [file dirname [info script]] common/assert.exp]
+
+harness_start
+	assert_match "init succeeds and reports parent" \
+		"init" \
+		"OK parent"
+	assert_err "unmap before map returns EOORDR" "unmap"
+harness_stop
+
+harness_start
+	assert_err "remap before init/map returns EOORDR" "remap 8192"
+	assert_err "unmap before init/map returns EOORDR" "unmap"
+
+	harness_cmd "init"
+	harness_cmd "map 4096"
+	assert_ok "unmap succeeds" "unmap"
+	assert_err "remap after unmap returns EOORDR" "remap 8192"
+harness_stop
+
+harness_start
+	harness_cmd "init"
+	assert_ok "map 4096 succeeds" "map 4096"
+	assert_match "state after map shows base mapped and correct size" \
+		"state" \
+		"OK base=1 size=4096"
+	assert_ok "unmap succeeds" "unmap"
+harness_stop
+
+harness_start
+	harness_cmd "init"
+	harness_cmd "map 4096"
+	assert_err "second map returns EOORDR" "map 4096"
+	assert_ok "unmap succeeds" "unmap"
+harness_stop
+
+harness_start
+	harness_cmd "init"
+	harness_cmd "map 4096"
+	assert_ok "unmap succeeds" "unmap"
+
+	assert_match "state after unmap shows base=0, size=0" \
+		"state" \
+		"OK base=0 size=0"
+harness_stop
+
+harness_start
+	harness_cmd "init"
+	harness_cmd "map 4096"
+
+	assert_ok   "write byte 0xAB at offset 0"    "write 0 171"
+	assert_eq   "read back byte at offset 0"      "read 0" "OK 171"
+
+	assert_ok   "write byte 0x00 at offset 4095"  "write 4095 0"
+	assert_eq   "read back byte at offset 4095"   "read 4095" "OK 0"
+
+	assert_ok   "write byte 255 at last byte"     "write 4095 255"
+	assert_eq   "read back 255"                   "read 4095" "OK 255"
+
+	assert_ok "unmap succeeds" "unmap"
+harness_stop
+
+harness_start
+	harness_cmd "init"
+	harness_cmd "map 4096"
+
+	assert_err "write beyond mapping is rejected"  "write 4096 1"
+	assert_err "read beyond mapping is rejected"   "read 4096"
+
+	assert_ok "unmap succeeds" "unmap"
+harness_stop
+
+harness_start
+	harness_cmd "init"
+	harness_cmd "map 4096"
+	harness_cmd "write 0 42"
+
+	assert_ok "remap to 8192 succeeds" "remap 8192"
+	assert_match "state reflects new size" \
+		"state" \
+		"OK base=1 size=8192"
+
+	assert_eq "byte at offset 0 preserved after remap" "read 0" "OK 42"
+
+	assert_ok "write into extended region succeeds" "write 8191 99"
+	assert_eq "read from extended region"           "read 8191" "OK 99"
+
+	assert_ok "unmap succeeds" "unmap"
+harness_stop
+
+harness_start
+	harness_cmd "init"
+	harness_cmd "map 8192"
+	harness_cmd "write 0 7"
+
+	assert_ok "remap to 4096 (shrink) succeeds" "remap 4096"
+	assert_match "state reflects shrunk size" \
+		"state" \
+		"OK base=1 size=4096"
+
+	assert_eq  "byte at offset 0 preserved after shrink" "read 0" "OK 7"
+	assert_err "former last byte is now out of bounds"   "read 8191"
+
+	assert_ok "unmap succeeds" "unmap"
+harness_stop
+
+harness_start
+	harness_cmd "init"
+	harness_cmd "map 4096"
+	harness_cmd "write 10 55"
+	assert_ok "unmap succeeds" "unmap"
+
+	harness_cmd "init"
+	harness_cmd "map 4096"
+	assert_eq "fresh mapping after re-init reads 0 at offset 10" \
+		"read 10" "OK 0"
+	assert_ok "unmap succeeds" "unmap"
+harness_stop
+
+harness_start
+	harness_cmd "init"
+	harness_cmd "map 4096"
+	harness_cmd "write 10 123"
+
+	harness_push
+		harness_cmd "init"
+		harness_cmd "map 4096"
+		assert_eq "sibling process sees its own zeroed mapping, not parent's byte" \
+			"read 10" "OK 0"
+		assert_ok "unmap succeeds" "unmap"
+	harness_pop
+
+	assert_ok "unmap succeeds" "unmap"
+harness_stop
+
+harness_start
+	assert_err "unknown command returns ERR" "bogus_command"
+harness_stop
+
+summarise
