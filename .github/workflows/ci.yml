@@ -1,8 +1,10 @@
 name: CI
 
 on:
+  push:
+    branches: [ master ]
   pull_request:
-    branches: [ main ]
+    branches: [ master ]
 
 jobs:
   build-and-test:
@@ -12,10 +14,10 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Install GCC 16
+    - name: Install dependancies
       run: |
         sudo apt-get update
         sudo apt-get install -y gcc expect
 
-    - name: Compile and Check
+    - name: Compile and check
       run: make check
