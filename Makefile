@@ -237,6 +237,7 @@ check: $(DRIVER_BINS)
 		echo "-========== ALL PASSED ($$skipped skipped) ===========-"; \
 	else \
 		echo "-========= $$failed FAILED ($$skipped skipped) ==========-"; \
+		exit 1; \
 	fi
 
 install: $(ALL_TARGETS)
