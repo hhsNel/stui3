@@ -1,5 +1,7 @@
 #include "mem/local.h"
 
+#include "skip.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +22,8 @@ int main(void)
 	int is_parent = 0;
 	char line[512];
 	stui_result res;
+
+	SKIP_UNLESS(MEM_BACKEND_LOCAL);
 
 	setvbuf(stdout, NULL, _IONBF, 0);
 

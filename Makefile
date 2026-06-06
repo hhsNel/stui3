@@ -223,14 +223,20 @@ $(TEST_BINDIR)/%: $(HARNESSDIR)/%.c $(LIB_STATIC)
 check: $(DRIVER_BINS)
 	@echo "-=================== TESTS ===================-"
 	@failed=0; \
+	skipped=0; \
 	for f in $(TESTDIR)/test_*.exp; do \
-	    echo "  RUN  $$f"; \
-	    expect $$f || failed=$$((failed+1)); \
+		echo "  RUN  $$f"; \
+		expect $$f; \
+		status=$$?; \
+		case "$$status" in \
+			1) failed=$$((failed+1)) ;; \
+			2) skipped=$$((skipped+1)) ;; \
+		esac; \
 	done; \
 	if [ $$failed -eq 0 ]; then \
-		echo "-================ ALL PASSED =================-"; \
+		echo "-========== ALL PASSED ($$skipped skipped) ===========-"; \
 	else \
-		echo "-=============== $$failed FAILED ================-"; \
+		echo "-========= $$failed FAILED ($$skipped skipped) ==========-"; \
 	fi
 
 install: $(ALL_TARGETS)

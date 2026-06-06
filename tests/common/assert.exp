@@ -1,4 +1,5 @@
 set ::timeout 5
+log_user 0
 
 set ::_pass 0
 set ::_fail 0
@@ -20,8 +21,9 @@ proc fail {desc {got ""}} {
 
 proc summarise {} {
 	set total [expr {$::_pass + $::_fail}]
-	puts "---"
+	puts ""
 	puts "Results: $::_pass/$total passed"
+	puts ""
 	if {$::_fail > 0} { exit 1 }
 }
 
@@ -34,6 +36,7 @@ proc harness_start {} {
 	set ::_hid_stack [list $::hid]
 	expect -i $::hid \
 		-re "READY\r?\n" {} \
+		-re "SKIP \[^\r\n]+\r?\n" { puts "SKIPPED\n"; exit 2 } \
 		timeout { error "harness_start: harness did not become ready" }
 	return $::hid
 }
