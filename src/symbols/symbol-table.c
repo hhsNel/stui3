@@ -50,14 +50,29 @@ static int find_module(char const *const name);
 static int is_path_known(char const *const path);
 static int is_module_used(int const mod);
 static int scan_module(char const *const filename, int const force, int const close);
+#if !IS_EMPTY(ALL_BUILTIN_MODULES)
+static int add_builtin(struct stui3_module_description const *const descr, int const force);
+#endif
 static int activate_scanned_module(int const mod, int const force);
 static void find_replacement_symbol(int const sym, int const blacklist_module);
-static void deactivate_module(int const mod);
+static void deactivate_module(int const mod, int const find_replacement);
+
+#define DECLARE_BUILTIN_DESCRIPTION(NAME) extern struct stui3_module_description CONCAT(NAME,_stui3_module);
+FOREACH_MACRO(DECLARE_BUILTIN_DESCRIPTION, ALL_BUILTIN_MODULES)
+#undef DECLARE_BUILTIN_DESCRIPTION
 
 int init_symbols() {
 	DIR *d;
 	struct dirent *ent;
 	char path[MODULE_PATH_LEN];
+#if !IS_EMPTY(ALL_BUILTIN_MODULES)
+	static struct stui3_module_description *builtin_descriptions[] = {
+#define NAME_TO_DECL(NAME) &CONCAT(NAME,_stui3_module),
+		FOREACH_MACRO(NAME_TO_DECL, ALL_BUILTIN_MODULES)
+#undef NAME_TO_DECL
+	};
+	unsigned int i;
+#endif
 
 	/* no builtin modules for now */
 
@@ -71,6 +86,12 @@ int init_symbols() {
 
 	num_modules = num_symbols = 0;
 	cap_modules = cap_symbols = 16;
+
+#if !IS_EMPTY(ALL_BUILTIN_MODULES)
+	for(i = 0; i < sizeof(builtin_descriptions)/sizeof(*builtin_descriptions); ++i) {
+		add_builtin(builtin_descriptions[i], 0);
+	}
+#endif
 
 	d = opendir(MODULE_PATH);
 	if(d) {
@@ -89,7 +110,7 @@ void shutdown_symbols() {
 	size_t i;
 
 	for(i = 0; i < num_modules; ++i) {
-		deactivate_module(i);
+		deactivate_module(i, 0);
 	}
 
 	free(module_table);
@@ -125,7 +146,7 @@ int load_module(char const *const module_name) {
 }
 
 void unload_module(int module_id) {
-	deactivate_module(module_id);
+	deactivate_module(module_id, 1);
 }
 
 size_t symbol_providers(stui3_module_symbol const symbol_name, int *mod_arr, size_t arr_size) {
@@ -168,7 +189,7 @@ rescan_module:
 			symbol_table[sym].owner = module_id;
 			symbol_table[sym].ptr = module_table[module_id].desc->pointers[i];
 			if(! is_module_used(old_owner)) {
-				deactivate_module(old_owner);
+				deactivate_module(old_owner, 0);
 			}
 			return module_id;
 		}
@@ -255,7 +276,7 @@ static int add_symtab(stui3_module_symbol const name, int owner, void *const ptr
 	symbol_table[new_id].ptr = ptr;
 	if(old_owner != -1) {
 		if(! is_module_used(old_owner)) {
-			deactivate_module(old_owner);
+			deactivate_module(old_owner, 0);
 		}
 	}
 
@@ -320,7 +341,7 @@ static int scan_module(char const *const filename, int const force, int const cl
 
 	if((new_module = is_path_known(filename)) >= 0) {
 		if(! force) return new_module;
-		deactivate_module(new_module);
+		deactivate_module(new_module, 1);
 		free(module_table[new_module].description);
 		free(module_table[new_module].exports);
 		module_table[new_module].description = NULL;
@@ -393,6 +414,76 @@ static int scan_module(char const *const filename, int const force, int const cl
 	return new_module;
 }
 
+#if !IS_EMPTY(ALL_BUILTIN_MODULES)
+static int add_builtin(struct stui3_module_description const *const descr, int const force) {
+	int new_module;
+	struct imodule_desc *new_modtab;
+	int increment = 0;
+	size_t i;
+
+	if((new_module = find_module(descr->name)) >= 0) {
+		if(! force) return new_module;
+		if(module_table[new_module].state == MODULE_BUILTIN) return new_module;
+		deactivate_module(new_module, 1);
+		free(module_table[new_module].description);
+		free(module_table[new_module].exports);
+		module_table[new_module].description = NULL;
+		module_table[new_module].exports = NULL;
+		module_table[new_module].state = MODULE_ERROR;
+	} else {
+		if(num_modules > INT_MAX) return -1;
+		if(num_modules == cap_modules) {
+			cap_modules *= 2;
+			new_modtab = realloc(module_table, cap_modules * sizeof(struct imodule_desc));
+			if(! new_modtab) {
+				cap_modules /= 2;
+				return -1;
+			}
+			module_table = new_modtab;
+		}
+		new_module = num_modules;
+		increment = 1;
+	}
+
+	if(descr->magic[0] != 0x9A || descr->magic[1] != 0x87 ||
+		descr->magic[2] != 0x6E || descr->magic[3] != 0x95) {
+		return -1;
+	}
+	if(descr->minimum_abi > ABI_VERSION || descr->deprecation_abi <= ABI_VERSION) {
+		return -1;
+	}
+
+	strncpy(module_table[new_module].name, descr->name, STUI3_MODULE_NAME_LENGTH - 1);
+	module_table[new_module].name[STUI3_MODULE_NAME_LENGTH - 1] = '\0';
+	if(descr->description) module_table[new_module].description = strdup(descr->description);
+	else module_table[new_module].description = strdup("");
+	if(! module_table[new_module].description) {
+		return -1;
+	}
+	module_table[new_module].path[0] = '\0';
+	module_table[new_module].num_export_names = descr->num_exports;
+	module_table[new_module].exports = malloc(descr->num_exports * sizeof(stui3_module_symbol));
+	if(! module_table[new_module].exports) {
+		free(module_table[new_module].description);
+		return -1;
+	}
+	memcpy(module_table[new_module].exports, descr->symbols, descr->num_exports * sizeof(stui3_module_symbol));
+	module_table[new_module].dl_handle = NULL;
+	module_table[new_module].desc = descr;
+	module_table[new_module].state = MODULE_BUILTIN;
+
+	for(i = 0; i < module_table[new_module].desc->num_exports && num_symbols <= INT_MAX; ++i) {
+		if(add_symtab(module_table[new_module].desc->symbols[i], new_module, module_table[new_module].desc->pointers[i], force) < 0) {
+			continue;
+		}
+	}
+	module_table[new_module].desc->load_hook();
+
+	if(increment) ++num_modules;
+	return new_module;
+}
+#endif
+
 static int activate_scanned_module(int const mod, int const force) {
 	size_t i;
 
@@ -408,7 +499,7 @@ static int activate_scanned_module(int const mod, int const force) {
 
 	for(i = 0; i < module_table[mod].desc->num_exports && num_symbols <= INT_MAX; ++i) {
 		if(add_symtab(module_table[mod].desc->symbols[i], mod, module_table[mod].desc->pointers[i], force) < 0) {
-			/* ??? TODO ??? */
+			continue;
 		}
 	}
 
@@ -442,11 +533,11 @@ rescan_module:
 	symbol_table[sym].ptr = NULL;
 }
 
-static void deactivate_module(int const mod) {
+static void deactivate_module(int const mod, int const find_replacement) {
 	if(mod < 0 || (size_t)mod >= num_modules) return;
 	if(module_table[mod].state != MODULE_LOADED) return;
 
-	symtab_rm_owner(mod, 1);
+	symtab_rm_owner(mod, find_replacement);
 	module_table[mod].desc->unload_hook();
 	dlclose(module_table[mod].dl_handle);
 	module_table[mod].dl_handle = NULL;

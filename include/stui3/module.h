@@ -28,6 +28,41 @@ struct stui3_module_description {
 };
 
 /* struct stui3_module_description stui3_module; */
+/* or */
+/* struct stui3_module_description THIS_MODULE_NAME_stui3_module; */
+
+#if !defined(COMPILE_MODULE_BUILTIN) && !defined(COMPILE_MODULE_LOADABLE)
+	#define COMPILE_MODULE_BUILTIN 0
+	#define COMPILE_MODULE_LOADABLE 1
+#elif !defined(COMPILE_MODULE_BUILTIN)
+	#if COMPILE_MODULE_LOADABLE
+		#define COMPILE_MODULE_BUILTIN 0
+	#else
+		#define COMPILE_MODULE_BUILTIN 1
+	#endif
+#elif !defined(COMPILE_MODULE_LOADABLE)
+	#if COMPILE_MODULE_BUILTIN
+		#define COMPILE_MODULE_LOADABLE 0
+	#else
+		#define COMPILE_MODULE_LOADABLE 1
+	#endif
+#endif
+#if (COMPILE_MODULE_BUILTIN) && (COMPILE_MODULE_LOADABLE)
+	#define COMPILE_MODULE_BUILTIN 0
+#elif !(COMPILE_MODULE_BUILTIN) && !(COMPILE_MODULE_LOADABLE)
+	#define COMPILE_MODULE_LOADABLE 1
+#endif
+
+#if COMPILE_MODULE_LOADABLE
+#define STUI3_MODULE_NAME(NAME) NAME
+#else
+#ifndef COMPILE_MODULE_NAME
+#error Expected COMPILE_MODULE_NAME as a name.
+#endif
+#define __CONCAT3(A,B,C) A##B##C
+#define CONCAT3(A,B,C) __CONCAT3(A,B,C)
+#define STUI3_MODULE_NAME(NAME) CONCAT3(COMPILE_MODULE_NAME,_,NAME)
+#endif
 
 #ifdef __cplusplus
 };

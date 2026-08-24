@@ -1,7 +1,11 @@
 CC ?= cc
-ABI_VERSION := 2
+ABI_VERSION := 3
 
 -include config.mk
+
+empty :=
+space := $(empty) $(empty)
+comma := ,
 
 SRCDIR := src
 MODULEDIR := modules
@@ -26,7 +30,6 @@ CONFIG :=
 
 ifeq ($(MODULE_DUMMY),builtin)
   BUILTIN_MODULES += dummy
-  CFLAGS += -DBUILTIN_DUMMY
   CONFIG += Y
 else ifeq ($(MODULE_DUMMY),module)
   LOADABLE_MODULES += dummy
@@ -36,7 +39,6 @@ else
 endif
 ifeq ($(MODULE_DUMMY2),builtin)
   BUILTIN_MODULES += dummy2
-  CFLAGS += -DBUILTIN_DUMMY2
   CONFIG += Y
 else ifeq ($(MODULE_DUMMY2),module)
   LOADABLE_MODULES += dummy2
@@ -62,13 +64,13 @@ all-modules: $(MODULE_SOS)
 
 repl-elfs: $(REPL_ELFS)
 
-$(BUILDDIR)/builtin/%.o: $(MODULEDIR)/%.c .config
+$(BUILDDIR)/builtin/%.o: $(MODULEDIR)/%.c
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -DMODULE_BUILTIN=1 -DMODULE_LOADABLE=0 -c -o $@ $<
+	$(CC) $(CFLAGS) -DCOMPILE_MODULE_BUILTIN=1 -DCOMPILE_MODULE_LOADABLE=0 -DCOMPILE_MODULE_NAME=$(firstword $(subst /, ,$*)) -c -o $@ $<
 
-$(BUILDDIR)/loadable/%.o: $(MODULEDIR)/%.c .config
+$(BUILDDIR)/loadable/%.o: $(MODULEDIR)/%.c
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -DMODULE_BUILTIN=0 -DMODULE_LOADABLE=1 -fPIC -c -o $@ $<
+	$(CC) $(CFLAGS) -DCOMPILE_MODULE_BUILTIN=0 -DCOMPILE_MODULE_LOADABLE=1 -DCOMPILE_MODULE_NAME=$(firstword $(subst /, ,$*)) -fPIC -c -o $@ $<
 
 $(BUILDDIR)/%.o: %.c .config
 	@mkdir -p $(@D)
@@ -84,7 +86,7 @@ repl-%: $(BUILDDIR)/$(REPLDIR)/%.o $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^
 
 clean:
-	rm -rf $(BUILDDIR) $(MODULE_SOS) $(REPL_ELFS)
+	rm -rf $(BUILDDIR) *.so $(REPL_ELFS)
 
 .PHONY: all all-modules repl-elfs clean FORCE
 
