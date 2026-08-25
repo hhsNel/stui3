@@ -5,6 +5,8 @@
 #define STUI3_EUPSTM (2)
 #define STUI3_EIACTN (3)
 #define STUI3_EIDATA (4)
+#define STUI3_ELIMIT (5)
+#define STUI3_ECHECK (6)
 
 #define _STR(X) #X
 #define STR(X) _STR(X)

@@ -1,5 +1,5 @@
 CC ?= cc
-ABI_VERSION := 3
+ABI_VERSION := 4
 
 -include config.mk
 

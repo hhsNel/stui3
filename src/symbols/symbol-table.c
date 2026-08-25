@@ -77,11 +77,11 @@ int init_symbols() {
 	/* no builtin modules for now */
 
 	module_table = malloc(16 * sizeof(struct imodule_desc));
-	if(! module_table) return -1;
+	if(! module_table) return -STUI3_EUPSTM;
 	symbol_table = malloc(16 * sizeof(struct isymbol));
 	if(! symbol_table) {
 		free(module_table);
-		return -1;
+		return -STUI3_EUPSTM;
 	}
 
 	num_modules = num_symbols = 0;
@@ -141,7 +141,7 @@ int load_module(char const *const module_name) {
 
 	snprintf(path, sizeof(path), "%s/%s.so", MODULE_PATH, module_name);
 	mod = scan_module(path, 1, 1);
-	if(mod < 0) return -1;
+	if(mod < 0) return mod;
 	return activate_scanned_module(mod, 1);
 }
 
@@ -174,7 +174,7 @@ int set_symbol_provider(stui3_module_symbol const symbol_name, int module_id) {
 	int old_owner;
 
 	sym = find_symtab(symbol_name);
-	if(sym < 0) return -1;
+	if(sym < 0) return sym;
 
 	if(module_id < 0 || (size_t)module_id >= num_modules) {
 		goto ret_prev;
@@ -245,7 +245,7 @@ static int find_symtab(stui3_module_symbol const name) {
 		}
 	}
 
-	return -1;
+	return -STUI3_ENOENT;
 }
 
 static int add_symtab(stui3_module_symbol const name, int owner, void *const ptr, int force) {
@@ -257,13 +257,13 @@ static int add_symtab(stui3_module_symbol const name, int owner, void *const ptr
 		if(! force) return new_id;
 		old_owner = symbol_table[new_id].owner;
 	} else {
-		if(num_symbols > INT_MAX) return -1;
+		if(num_symbols > INT_MAX) return -STUI3_ELIMIT;
 		if(num_symbols == cap_symbols) {
 			cap_symbols *= 2;
 			new_symtab = realloc(symbol_table, cap_symbols * sizeof(struct isymbol));
 			if(! new_symtab) {
 				cap_symbols /= 2;
-				return -1;
+				return -STUI3_EUPSTM;
 			}
 			symbol_table = new_symtab;
 		}
@@ -307,7 +307,7 @@ static int find_module(char const *const name) {
 		}
 	}
 
-	return -1;
+	return -STUI3_ENOENT;
 }
 
 static int is_path_known(char const *const path) {
@@ -319,7 +319,7 @@ static int is_path_known(char const *const path) {
 		}
 	}
 
-	return -1;
+	return -STUI3_ENOENT;
 }
 
 static int is_module_used(int const mod) {
@@ -348,13 +348,13 @@ static int scan_module(char const *const filename, int const force, int const cl
 		module_table[new_module].exports = NULL;
 		module_table[new_module].state = MODULE_ERROR;
 	} else {
-		if(num_modules > INT_MAX) return -1;
+		if(num_modules > INT_MAX) return -STUI3_ELIMIT;
 		if(num_modules == cap_modules) {
 			cap_modules *= 2;
 			new_modtab = realloc(module_table, cap_modules * sizeof(struct imodule_desc));
 			if(! new_modtab) {
 				cap_modules /= 2;
-				return -1;
+				return -STUI3_EUPSTM;
 			}
 			module_table = new_modtab;
 		}
@@ -363,23 +363,23 @@ static int scan_module(char const *const filename, int const force, int const cl
 	}
 
 	dl_handle = dlopen(filename, RTLD_NOW | RTLD_LOCAL);
-	if(! dl_handle) return -1;
+	if(! dl_handle) return -STUI3_EUPSTM;
 
 	dlerror();
 	description = dlsym(dl_handle, "stui3_module");
 	if(! description || dlerror()) {
 		dlclose(dl_handle);
-		return -1;
+		return -STUI3_EIDATA;
 	}
 
 	if(description->magic[0] != 0x9A || description->magic[1] != 0x87 ||
 		description->magic[2] != 0x6E || description->magic[3] != 0x95) {
 		dlclose(dl_handle);
-		return -1;
+		return -STUI3_ECHECK;
 	}
 	if(description->minimum_abi > ABI_VERSION || description->deprecation_abi <= ABI_VERSION) {
 		dlclose(dl_handle);
-		return -1;
+		return -STUI3_EIACTN;
 	}
 
 	strncpy(module_table[new_module].name, description->name, STUI3_MODULE_NAME_LENGTH - 1);
@@ -388,7 +388,7 @@ static int scan_module(char const *const filename, int const force, int const cl
 	else module_table[new_module].description = strdup("");
 	if(! module_table[new_module].description) {
 		dlclose(dl_handle);
-		return -1;
+		return -STUI3_EUPSTM;
 	}
 	strncpy(module_table[new_module].path, filename, MODULE_PATH_LEN - 1);
 	module_table[new_module].path[MODULE_PATH_LEN - 1] = '\0';
@@ -397,7 +397,7 @@ static int scan_module(char const *const filename, int const force, int const cl
 	if(! module_table[new_module].exports) {
 		free(module_table[new_module].description);
 		dlclose(dl_handle);
-		return -1;
+		return -STUI3_EUPSTM;
 	}
 	memcpy(module_table[new_module].exports, description->symbols, description->num_exports * sizeof(stui3_module_symbol));
 	if(close) {
@@ -431,13 +431,13 @@ static int add_builtin(struct stui3_module_description const *const descr, int c
 		module_table[new_module].exports = NULL;
 		module_table[new_module].state = MODULE_ERROR;
 	} else {
-		if(num_modules > INT_MAX) return -1;
+		if(num_modules > INT_MAX) return -STUI3_ELIMIT;
 		if(num_modules == cap_modules) {
 			cap_modules *= 2;
 			new_modtab = realloc(module_table, cap_modules * sizeof(struct imodule_desc));
 			if(! new_modtab) {
 				cap_modules /= 2;
-				return -1;
+				return -STUI3_EUPSTM;
 			}
 			module_table = new_modtab;
 		}
@@ -447,10 +447,10 @@ static int add_builtin(struct stui3_module_description const *const descr, int c
 
 	if(descr->magic[0] != 0x9A || descr->magic[1] != 0x87 ||
 		descr->magic[2] != 0x6E || descr->magic[3] != 0x95) {
-		return -1;
+		return -STUI3_ECHECK;
 	}
 	if(descr->minimum_abi > ABI_VERSION || descr->deprecation_abi <= ABI_VERSION) {
-		return -1;
+		return -STUI3_EIACTN;
 	}
 
 	strncpy(module_table[new_module].name, descr->name, STUI3_MODULE_NAME_LENGTH - 1);
@@ -458,14 +458,14 @@ static int add_builtin(struct stui3_module_description const *const descr, int c
 	if(descr->description) module_table[new_module].description = strdup(descr->description);
 	else module_table[new_module].description = strdup("");
 	if(! module_table[new_module].description) {
-		return -1;
+		return -STUI3_EUPSTM;
 	}
 	module_table[new_module].path[0] = '\0';
 	module_table[new_module].num_export_names = descr->num_exports;
 	module_table[new_module].exports = malloc(descr->num_exports * sizeof(stui3_module_symbol));
 	if(! module_table[new_module].exports) {
 		free(module_table[new_module].description);
-		return -1;
+		return -STUI3_EUPSTM;
 	}
 	memcpy(module_table[new_module].exports, descr->symbols, descr->num_exports * sizeof(stui3_module_symbol));
 	module_table[new_module].dl_handle = NULL;
@@ -488,13 +488,13 @@ static int activate_scanned_module(int const mod, int const force) {
 	size_t i;
 
 	if(mod < 0 || (size_t)mod >= num_modules) {
-		return -1;
+		return -STUI3_ENOENT;
 	}
 	if(module_table[mod].state != MODULE_SCANNED && module_table[mod].state != MODULE_ERROR) {
 		return mod;
 	}
 	if(mod != scan_module(module_table[mod].path, 1, 0)) {
-		return -1;
+		return -STUI3_ENOENT;
 	}
 
 	for(i = 0; i < module_table[mod].desc->num_exports && num_symbols <= INT_MAX; ++i) {
