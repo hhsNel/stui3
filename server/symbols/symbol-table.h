@@ -23,14 +23,15 @@ struct module_info {
 
 int init_symbols();
 void shutdown_symbols();
-void *lookup_symbol(stui3_module_symbol const symbol_name);
+void *lookup_symbol(char const *const symbol_name);
 int lookup_module(char const *const module_name);
 int load_module(char const *const module_name);
 void unload_module(int const module_id);
-size_t symbol_providers(stui3_module_symbol const symbol_name, int *const mod_arr, size_t const arr_size);
-int set_symbol_provider(stui3_module_symbol const symbol_name, int const module_id);
+size_t symbol_providers(char const *const symbol_name, int *const mod_arr, size_t const arr_size);
+int set_symbol_provider(char const *const symbol_name, int const module_id);
 size_t module_count();
 void module_info(int const module_id, struct module_info *const arg);
+int module_command(int const module_id, char const *const in, char *const out, size_t const out_sz);
 
 #endif
 

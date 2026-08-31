@@ -1,8 +1,6 @@
 CC ?= cc
 ABI_VERSION := 5
 
--include config.mk
-
 empty :=
 space := $(empty) $(empty)
 comma := ,
@@ -15,16 +13,8 @@ INCLUDEDIR := include
 REPLDIR := repls
 BUILDDIR := build
 
-GLOBAL_CFLAGS := -std=c99 -DABI_VERSION=$(ABI_VERSION) -I$(INCLUDEDIR) -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Wpedantic -Werror
+GLOBAL_CFLAGS := -std=c99 -DABI_VERSION=$(ABI_VERSION) -I$(INCLUDEDIR) -D_POSIX_C_SOURCE=200809L -D_GNU_SOURCE -Wall -Wextra -Wpedantic -Werror
 GLOBAL_LDFLAGS := 
-SERVER_CFLAGS := $(GLOBAL_CFLAGS) -I$(SERVERDIR) -I$(COMMONDIR)
-LIB_CFLAGS := $(GLOBAL_CFLAGS) -I$(LIBDIR) -I$(COMMONDIR)
-COMMON_CFLAGS := $(GLOBAL_CFLAGS) -I$(COMMONDIR)
-MODULE_CFLAGS := $(GLOBAL_CFLAGS) -I$(SERVERDIR)
-SERVER_LDFLAGS := $(GLOBAL_LDFLAGS)
-LIB_LDFLAGS := $(GLOBAL_LDFLAGS)
-COMMON_LDFLAGS := $(GLOBAL_LDFLAGS)
-MODULE_LDFLAGS := $(GLOBAL_LDFLAGS)
 
 SERVER_SRCS := $(shell find $(SERVERDIR) -name "*.c")
 LIB_SRCS := $(shell find $(LIBDIR) -name "*.c")
@@ -42,37 +32,53 @@ BUILTIN_MODULES :=
 LOADABLE_MODULES :=
 CONFIG :=
 
-ifeq ($(MODULE_DUMMY),builtin)
-  BUILTIN_MODULES += dummy
+define MODULE
+ifeq ($(2),builtin)
+  BUILTIN_MODULES += $(1)
   CONFIG += Y
-else ifeq ($(MODULE_DUMMY),module)
-  LOADABLE_MODULES += dummy
+else ifeq ($(2),module)
+  LOADABLE_MODULES += $(1)
   CONFIG += M
 else
   CONFIG += N
 endif
-ifeq ($(MODULE_DUMMY2),builtin)
-  BUILTIN_MODULES += dummy2
-  CONFIG += Y
-else ifeq ($(MODULE_DUMMY2),module)
-  LOADABLE_MODULES += dummy2
-  CONFIG += M
-else
-  CONFIG += N
+endef
+
+-include config.mk
+
+DEBUG ?= 0
+ifeq ($(DEBUG),1)
+  GLOBAL_CFLAGS += -g
+  GLOBAL_LDFLAGS += -g
 endif
+
+SERVER_CFLAGS := $(GLOBAL_CFLAGS) -I$(SERVERDIR) -I$(COMMONDIR)
+LIB_CFLAGS := $(GLOBAL_CFLAGS) -I$(LIBDIR) -I$(COMMONDIR)
+COMMON_CFLAGS := $(GLOBAL_CFLAGS) -I$(COMMONDIR)
+MODULE_CFLAGS := $(GLOBAL_CFLAGS) -I$(SERVERDIR)
+SERVER_LDFLAGS := $(GLOBAL_LDFLAGS)
+LIB_LDFLAGS := $(GLOBAL_LDFLAGS)
+COMMON_LDFLAGS := $(GLOBAL_LDFLAGS)
+MODULE_LDFLAGS := $(GLOBAL_LDFLAGS)
 
 BUILTIN_MODULE_SRCS := $(foreach BUILTIN_MODULE, $(BUILTIN_MODULES), $(shell find $(MODULEDIR)/$(BUILTIN_MODULE) -name "*.c"))
 SERVER_SRCS += $(BUILTIN_MODULE_SRCS)
 SERVER_OBJS += $(BUILTIN_MODULE_SRCS:$(MODULEDIR)/%.c=$(BUILDDIR)/builtin/%.o)
-SERVER_CFLAGS += -DALL_BUILTIN_MODULES="$(subst $(space),$(comma),$(BUILTIN_MODULES))"
+ifneq ($(BUILTIN_MODULES),)
+  SERVER_CFLAGS += -DALL_BUILTIN_MODULES="$(subst $(space),$(comma),$(BUILTIN_MODULES))"
+  SERVER_CFLAGS += -DBUILTIN_MODULES_ENABLED
+endif
 MODULE_SOS += $(foreach LOADABLE_MODULE, $(LOADABLE_MODULES), $(LOADABLE_MODULE).so)
 
-all: $(ALL_CLEAN_DEP) all-modules repl-elfs
+all: stui3-server all-modules repl-elfs
 
 .config: FORCE
 	@if [ "$$(cat $@ 2>/dev/null || true)" != "$(CONFIG)" ]; then \
 		echo "$(CONFIG)" > $@; \
 	fi
+
+stui3-server: $(SERVER_OBJS)
+	$(CC) $(SERVER_LDFLAGS) -o $@ $^
 
 all-modules: $(MODULE_SOS)
 
@@ -105,11 +111,11 @@ $(1).so: $(patsubst $(MODULEDIR)/%.c, $(BUILDDIR)/loadable/%.o, $(shell find $(M
 endef
 $(foreach LOADABLE_MODULE, $(LOADABLE_MODULES), $(eval $(call LOADABLE_MODULE_template,$(LOADABLE_MODULE))))
 
-repl-%: $(BUILDDIR)/$(REPLDIR)/%.o $(SERVER_OBJS)
+repl-%: $(BUILDDIR)/$(REPLDIR)/%.o $(filter-out $(BUILDDIR)/$(SERVERDIR)/main.o, $(SERVER_OBJS))
 	$(CC) $(MODULE_LDFLAGS) -o $@ $^
 
 clean:
-	rm -rf $(BUILDDIR) *.so $(REPL_ELFS)
+	rm -rf $(BUILDDIR) stui3-server *.so $(REPL_ELFS)
 
 .PHONY: all all-modules repl-elfs clean FORCE
 

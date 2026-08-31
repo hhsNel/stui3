@@ -11,8 +11,15 @@ static void *pointers[] = {
 	&hello_world,
 };
 
-static void on_load() {
+static int on_load() {
 	fprintf(stderr, "dummy module loaded!\n");
+	return 0;
+}
+
+static int command(char const *const in, char *const out, size_t const out_sz) {
+	(void)in;
+	if(out_sz) *out = '\0';
+	return 1;
 }
 
 static void on_unload() {
@@ -21,7 +28,7 @@ static void on_unload() {
 
 struct stui3_module_description STUI3_MODULE_NAME(stui3_module) = {
 	.magic = { 0x9A, 0x87, 0x6E, 0x95 },
-	.minimum_abi = 2,
+	.minimum_abi = 5,
 	.deprecation_abi = ABI_VERSION + 1,
 	.name = "dummy",
 	.description = "This module provides a \"hello_world\" symbol which is a simple C string",
@@ -29,6 +36,7 @@ struct stui3_module_description STUI3_MODULE_NAME(stui3_module) = {
 	.pointers = pointers,
 	.num_exports = sizeof(symbols)/sizeof(*symbols),
 	.load_hook = on_load,
+	.command = command,
 	.unload_hook = on_unload,
 };
 

@@ -34,7 +34,7 @@ int main() {
 	do { puts("error"); continue; } while(0);
 
 		if(strncmp(buf, "help", 4) == 0) {
-			puts("help|lookups <symbol_name>|lookupm <module_name>|load <module_name>|unload <module_id>|providers <symbol_name>|set <symbol_name> <module_id>|num|info <module_id>|exit");
+			puts("help|lookups <symbol_name>|lookupm <module_name>|load <module_name>|unload <module_id>|providers <symbol_name>|set <symbol_name> <module_id>|num|info <module_id>|command <module_id> <cmd_string>|exit");
 		} else if(strncmp(buf, "lookups", 7) == 0) {
 			sscanf(buf, "lookups %64s", arg);
 			printf("ok %p\n", lookup_symbol(arg));
@@ -75,6 +75,10 @@ int main() {
 				printf("\t\t- %s\n", symbol_buf[i]);
 			}
 			minfo.export_arg = 0;
+		} else if(strncmp(buf, "command", 7) == 0) {
+			sscanf(buf, "command %d %64s", &argi, arg);
+			printf("ok %d\n", module_command(argi, arg, desc_buf, sizeof(desc_buf)));
+			printf("feedback: %s\n", desc_buf);
 		} else {
 			printf("unknown command: %s\n", buf);
 		}

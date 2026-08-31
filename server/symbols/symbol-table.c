@@ -1,6 +1,7 @@
 #include "symbol-table.h"
 
 #include "util.h"
+#include "stui3.h"
 
 #define MODULE_PATH_LEN MIN(PATH_MAX, 512)
 #define MODULE_PATH "."
@@ -38,10 +39,10 @@ struct isymbol {
 	void *ptr;
 };
 
-static struct imodule_desc *module_table;
-static size_t num_modules, cap_modules;
-static struct isymbol *symbol_table;
-static size_t num_symbols, cap_symbols;
+static struct imodule_desc *module_table = NULL;
+static size_t num_modules = 0, cap_modules = 0;
+static struct isymbol *symbol_table = NULL;
+static size_t num_symbols = 0, cap_symbols = 0;
 
 static int find_symtab(stui3_module_symbol const name);
 static int add_symtab(stui3_module_symbol const name, int const owner, void *const ptr, int const force);
@@ -50,22 +51,24 @@ static int find_module(char const *const name);
 static int is_path_known(char const *const path);
 static int is_module_used(int const mod);
 static int scan_module(char const *const filename, int const force, int const close);
-#if !IS_EMPTY(ALL_BUILTIN_MODULES)
+#ifdef BUILTIN_MODULES_ENABLED
 static int add_builtin(struct stui3_module_description const *const descr, int const force);
 #endif
 static int activate_scanned_module(int const mod, int const force);
 static void find_replacement_symbol(int const sym, int const blacklist_module);
 static void deactivate_module(int const mod, int const find_replacement);
 
+#ifdef BUILTIN_MODULES_ENABLED
 #define DECLARE_BUILTIN_DESCRIPTION(NAME) extern struct stui3_module_description CONCAT(NAME,_stui3_module);
 FOREACH_MACRO(DECLARE_BUILTIN_DESCRIPTION, ALL_BUILTIN_MODULES)
 #undef DECLARE_BUILTIN_DESCRIPTION
+#endif
 
 int init_symbols() {
 	DIR *d;
 	struct dirent *ent;
 	char path[MODULE_PATH_LEN];
-#if !IS_EMPTY(ALL_BUILTIN_MODULES)
+#ifdef BUILTIN_MODULES_ENABLED
 	static struct stui3_module_description *builtin_descriptions[] = {
 #define NAME_TO_DECL(NAME) &CONCAT(NAME,_stui3_module),
 		FOREACH_MACRO(NAME_TO_DECL, ALL_BUILTIN_MODULES)
@@ -87,7 +90,7 @@ int init_symbols() {
 	num_modules = num_symbols = 0;
 	cap_modules = cap_symbols = 16;
 
-#if !IS_EMPTY(ALL_BUILTIN_MODULES)
+#ifdef BUILTIN_MODULES_ENABLED
 	for(i = 0; i < sizeof(builtin_descriptions)/sizeof(*builtin_descriptions); ++i) {
 		add_builtin(builtin_descriptions[i], 0);
 	}
@@ -110,7 +113,11 @@ void shutdown_symbols() {
 	size_t i;
 
 	for(i = 0; i < num_modules; ++i) {
-		deactivate_module(i, 0);
+		if(module_table[i].state == MODULE_BUILTIN) {
+			module_table[i].desc->unload_hook();
+		} else {
+			deactivate_module(i, 0);
+		}
 	}
 
 	free(module_table);
@@ -118,7 +125,7 @@ void shutdown_symbols() {
 	num_modules = cap_modules = num_symbols = cap_symbols = 0;
 }
 
-void *lookup_symbol(stui3_module_symbol const symbol_name) {
+void *lookup_symbol(char const *const symbol_name) {
 	int idx;
 
 	idx = find_symtab(symbol_name);
@@ -149,7 +156,7 @@ void unload_module(int module_id) {
 	deactivate_module(module_id, 1);
 }
 
-size_t symbol_providers(stui3_module_symbol const symbol_name, int *mod_arr, size_t arr_size) {
+size_t symbol_providers(char const *const symbol_name, int *mod_arr, size_t arr_size) {
 	size_t i, j, n;
 
 	if(arr_size == 0) return 0;
@@ -168,7 +175,7 @@ size_t symbol_providers(stui3_module_symbol const symbol_name, int *mod_arr, siz
 	return n;
 }
 
-int set_symbol_provider(stui3_module_symbol const symbol_name, int module_id) {
+int set_symbol_provider(char const *const symbol_name, int module_id) {
 	size_t i;
 	int sym;
 	int old_owner;
@@ -234,6 +241,17 @@ void module_info(int const module_id, struct module_info *const arg) {
 			arg->export_arg = 0;
 		}
 	}
+}
+
+int module_command(int const module_id, char const *const in, char *const out, size_t const out_sz) {
+	int ret;
+
+	if(module_id < 0 || (size_t)module_id >= num_modules) return -STUI3_ENOENT;
+
+	if(! module_table[module_id].desc) {
+		if((ret = activate_scanned_module(module_id, 0)) < 0) return ret;
+	}
+	return module_table[module_id].desc->command(in, out, out_sz);
 }
 
 static int find_symtab(stui3_module_symbol const name) {
@@ -414,12 +432,13 @@ static int scan_module(char const *const filename, int const force, int const cl
 	return new_module;
 }
 
-#if !IS_EMPTY(ALL_BUILTIN_MODULES)
+#ifdef BUILTIN_MODULES_ENABLED
 static int add_builtin(struct stui3_module_description const *const descr, int const force) {
 	int new_module;
 	struct imodule_desc *new_modtab;
 	int increment = 0;
 	size_t i;
+	int ret;
 
 	if((new_module = find_module(descr->name)) >= 0) {
 		if(! force) return new_module;
@@ -453,6 +472,8 @@ static int add_builtin(struct stui3_module_description const *const descr, int c
 		return -STUI3_EIACTN;
 	}
 
+	if((ret = descr->load_hook()) < 0) return ret;
+
 	strncpy(module_table[new_module].name, descr->name, STUI3_MODULE_NAME_LENGTH - 1);
 	module_table[new_module].name[STUI3_MODULE_NAME_LENGTH - 1] = '\0';
 	if(descr->description) module_table[new_module].description = strdup(descr->description);
@@ -477,7 +498,6 @@ static int add_builtin(struct stui3_module_description const *const descr, int c
 			continue;
 		}
 	}
-	module_table[new_module].desc->load_hook();
 
 	if(increment) ++num_modules;
 	return new_module;
@@ -486,6 +506,7 @@ static int add_builtin(struct stui3_module_description const *const descr, int c
 
 static int activate_scanned_module(int const mod, int const force) {
 	size_t i;
+	int ret;
 
 	if(mod < 0 || (size_t)mod >= num_modules) {
 		return -STUI3_ENOENT;
@@ -497,6 +518,8 @@ static int activate_scanned_module(int const mod, int const force) {
 		return -STUI3_ENOENT;
 	}
 
+	if((ret = module_table[mod].desc->load_hook()) < 0) return ret;
+
 	for(i = 0; i < module_table[mod].desc->num_exports && num_symbols <= INT_MAX; ++i) {
 		if(add_symtab(module_table[mod].desc->symbols[i], mod, module_table[mod].desc->pointers[i], force) < 0) {
 			continue;
@@ -504,7 +527,6 @@ static int activate_scanned_module(int const mod, int const force) {
 	}
 
 	module_table[mod].state = MODULE_LOADED;
-	module_table[mod].desc->load_hook();
 	return mod;
 }
 

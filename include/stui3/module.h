@@ -23,7 +23,8 @@ struct stui3_module_description {
 	stui3_module_symbol *symbols;
 	void **pointers;
 	size_t num_exports;
-	void (*load_hook)();
+	int (*load_hook)();
+	int (*command)(char const *const in, char *const out, size_t const out_sz);
 	void (*unload_hook)();
 };
 
