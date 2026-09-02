@@ -390,8 +390,10 @@ static int scan_module(char const *const filename, int const force, int const cl
 		return -STUI3_EIDATA;
 	}
 
-	if(description->magic[0] != 0x9A || description->magic[1] != 0x87 ||
-		description->magic[2] != 0x6E || description->magic[3] != 0x95) {
+	if(description->magic[0] != STUI3_MODULE_DESCRIPTION_MAGIC_0 ||
+		description->magic[1] != STUI3_MODULE_DESCRIPTION_MAGIC_1 ||
+		description->magic[2] != STUI3_MODULE_DESCRIPTION_MAGIC_2 ||
+		description->magic[3] != STUI3_MODULE_DESCRIPTION_MAGIC_3) {
 		dlclose(dl_handle);
 		return -STUI3_ECHECK;
 	}
@@ -464,8 +466,10 @@ static int add_builtin(struct stui3_module_description const *const descr, int c
 		increment = 1;
 	}
 
-	if(descr->magic[0] != 0x9A || descr->magic[1] != 0x87 ||
-		descr->magic[2] != 0x6E || descr->magic[3] != 0x95) {
+	if(descr->magic[0] != STUI3_MODULE_DESCRIPTION_MAGIC_0 ||
+		descr->magic[1] != STUI3_MODULE_DESCRIPTION_MAGIC_1 ||
+		descr->magic[2] != STUI3_MODULE_DESCRIPTION_MAGIC_2 ||
+		descr->magic[3] != STUI3_MODULE_DESCRIPTION_MAGIC_3) {
 		return -STUI3_ECHECK;
 	}
 	if(descr->minimum_abi > ABI_VERSION || descr->deprecation_abi <= ABI_VERSION) {

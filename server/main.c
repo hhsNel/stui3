@@ -1,6 +1,7 @@
 #include "core/setup-daemon.h"
 #include "symbols/symbol-table.h"
 #include "core/logf.h"
+#include "serve/handle-client.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -9,6 +10,10 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/un.h>
+#include <fcntl.h>
+#include <poll.h>
+
+void run_server(int socket_fd);
 
 int main(int argc, char **argv) {
 	unsigned int i;
@@ -68,18 +73,115 @@ int main(int argc, char **argv) {
 	strncpy(socket_address.sun_path, sock_path, sizeof(socket_address.sun_path) - 1);
 	if(bind(socket_fd, (struct sockaddr *)&socket_address, sizeof(socket_address)) < 0) {
 		logf_stderr("Could not bind: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
-		exit(1);
+		goto shutdown;
 	}
 	logf_stdout("Bound socket to path %s\n", sock_path);
 
-	logf_stderr("Operation (err)...\n");
-	logf_stdout("Operation (out)...\n");
+	if(listen(socket_fd, SOMAXCONN) < 0) {
+		logf_stderr("Could not listen: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		goto shutdown;
+	}
 
+	ret = fcntl(socket_fd, F_GETFL, 0);
+	if(ret < 0) {
+		logf_stderr("Could not fnctl F_GETFL: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		goto shutdown;
+	}
+	ret |= O_NONBLOCK;
+	if(fcntl(socket_fd, F_SETFL, ret) < 0) {
+		logf_stderr("Could not fnctl F_SETFL: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		goto shutdown;
+	}
+
+	run_server(socket_fd);
+
+shutdown:
 	logf_stdout("Shutting down the socket\n");
 	unlink(sock_path);
 	close(socket_fd);
 
 	logf_stdout("Shutting down symbol resolution\n");
 	shutdown_symbols();
+}
+
+void
+run_server(int socket_fd) {
+	struct pollfd *pfds, *new_pfds;
+	unsigned int num_pfds, cap_pfds;
+	int client_fd;
+	unsigned int i;
+	struct client_context *ctxs, *new_ctxs;
+	unsigned int num_ctxs, cap_ctxs;
+	int ret;
+
+	cap_pfds = 16;
+	pfds = malloc(cap_pfds * sizeof(struct pollfd));
+	if(! pfds) {
+		logf_stderr("Could not malloc pollfds: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		return;
+	}
+	
+	cap_ctxs = 16;
+	ctxs = malloc(cap_ctxs * sizeof(struct client_context));
+	if(! ctxs) {
+		logf_stderr("Could not malloc ctxs: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		return;
+	}
+	num_ctxs = 0;
+
+	pfds[0].fd = socket_fd;
+	pfds[0].events = POLLIN;
+	num_pfds = 1;
+
+	while(1) {
+		if(poll(pfds, num_pfds, -1) > 0) {
+			for(i = 1; i < num_pfds; ++i) {
+				if(pfds[i].revents & (POLLIN | POLLOUT)) {
+					/* handle client */
+					ret = handle_client(&ctxs[i - 1]);
+					if(ret < 0) {
+						logf_stderr("Error while handling client: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+						/* TODO: cleanup ctx */
+					}
+					if(ret == 0) {
+						/* TODO: cleanup ctx */
+					}
+				}
+			}
+			if(pfds[0].revents & POLLIN) {
+				/* accept socket */
+				client_fd = accept(socket_fd, NULL, NULL);
+				if(client_fd >= 0) {
+					if(num_pfds == cap_pfds) {
+						cap_pfds *= 2;
+						new_pfds = realloc(pfds, cap_pfds * sizeof(struct pollfd));
+						if(! new_pfds) {
+							logf_stderr("Could not realloc pollfds: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+							cap_pfds /= 2;
+							close(client_fd);
+							continue;
+						}
+					}
+					if(num_ctxs == cap_ctxs) {
+						cap_ctxs *= 2;
+						new_ctxs = realloc(ctxs, cap_ctxs * sizeof(struct client_context));
+						if(! new_ctxs) {
+							logf_stderr("Could not realloc ctxs: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+							cap_ctxs /= 2;
+							close(client_fd);
+							continue;
+						}
+					}
+					pfds[num_pfds].fd = client_fd;
+					pfds[num_pfds].events = POLLIN | POLLOUT;
+					++num_pfds;
+					init_client_context(client_fd, &ctxs[num_ctxs]);
+					++num_ctxs;
+				} else {
+					logf_stderr("Could not accept client_fd: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+				}
+			}
+		}
+	}
 }
 

@@ -1,5 +1,5 @@
-#ifndef SETUP_DAEMON_H
-#define SETUP_DAEMON_H
+#ifndef CORE_SETUP_DAEMON_H
+#define CORE_SETUP_DAEMON_H
 
 void become_daemon();
 //void setup_fds();

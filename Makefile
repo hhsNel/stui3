@@ -1,5 +1,5 @@
 CC ?= cc
-ABI_VERSION := 5
+ABI_VERSION := 6
 
 empty :=
 space := $(empty) $(empty)
@@ -23,7 +23,7 @@ REPL_SRCS := $(shell find $(REPLDIR) -name "*.c")
 
 SERVER_OBJS := $(SERVER_SRCS:%.c=$(BUILDDIR)/%.o)
 LIB_OBJS := $(LIB_SRCS:%.c=$(BUILDDIR)/%.o)
-COMMON_OBJS := $(COMMON_OBJS:%.c=$(BUILDDIR)/%.o)
+COMMON_OBJS := $(COMMON_SRCS:%.c=$(BUILDDIR)/%.o)
 MODULE_SOS := 
 REPL_OBJS := $(REPL_SRCS:%.c=$(BUILDDIR)/%.o)
 REPL_ELFS := $(REPL_SRCS:$(REPLDIR)/%.c=repl-%)
@@ -55,11 +55,11 @@ endif
 SERVER_CFLAGS := $(GLOBAL_CFLAGS) -I$(SERVERDIR) -I$(COMMONDIR)
 LIB_CFLAGS := $(GLOBAL_CFLAGS) -I$(LIBDIR) -I$(COMMONDIR)
 COMMON_CFLAGS := $(GLOBAL_CFLAGS) -I$(COMMONDIR)
-MODULE_CFLAGS := $(GLOBAL_CFLAGS) -I$(SERVERDIR)
+MODULE_CFLAGS := $(GLOBAL_CFLAGS) -I$(COMMONDIR) -I$(SERVERDIR)
 SERVER_LDFLAGS := $(GLOBAL_LDFLAGS)
-LIB_LDFLAGS := $(GLOBAL_LDFLAGS)
+LIB_LDFLAGS := $(GLOBAL_LDFLAGS) -shared
 COMMON_LDFLAGS := $(GLOBAL_LDFLAGS)
-MODULE_LDFLAGS := $(GLOBAL_LDFLAGS)
+MODULE_LDFLAGS := $(GLOBAL_LDFLAGS) -shared
 
 BUILTIN_MODULE_SRCS := $(foreach BUILTIN_MODULE, $(BUILTIN_MODULES), $(shell find $(MODULEDIR)/$(BUILTIN_MODULE) -name "*.c"))
 SERVER_SRCS += $(BUILTIN_MODULE_SRCS)
@@ -70,15 +70,18 @@ ifneq ($(BUILTIN_MODULES),)
 endif
 MODULE_SOS += $(foreach LOADABLE_MODULE, $(LOADABLE_MODULES), $(LOADABLE_MODULE).so)
 
-all: stui3-server all-modules repl-elfs
+all: stui3-server libstui3.so all-modules repl-elfs
 
 .config: FORCE
 	@if [ "$$(cat $@ 2>/dev/null || true)" != "$(CONFIG)" ]; then \
 		echo "$(CONFIG)" > $@; \
 	fi
 
-stui3-server: $(SERVER_OBJS)
+stui3-server: $(SERVER_OBJS) $(COMMON_OBJS)
 	$(CC) $(SERVER_LDFLAGS) -o $@ $^
+
+libstui3.so: $(LIB_OBJS) $(COMMON_OBJS)
+	$(CC) $(LIB_LDFLAGS) -o $@ $^
 
 all-modules: $(MODULE_SOS)
 
@@ -107,12 +110,12 @@ $(BUILDDIR)/$(REPLDIR)/%.o: $(REPLDIR)/%.c
 
 define LOADABLE_MODULE_template
 $(1).so: $(patsubst $(MODULEDIR)/%.c, $(BUILDDIR)/loadable/%.o, $(shell find $(MODULEDIR)/$(1) -name "*.c"))
-	$(CC) $(MODULE_LDFLAGS) -shared -o $$@ $$^
+	$(CC) $(MODULE_LDFLAGS) -o $$@ $$^
 endef
 $(foreach LOADABLE_MODULE, $(LOADABLE_MODULES), $(eval $(call LOADABLE_MODULE_template,$(LOADABLE_MODULE))))
 
-repl-%: $(BUILDDIR)/$(REPLDIR)/%.o $(filter-out $(BUILDDIR)/$(SERVERDIR)/main.o, $(SERVER_OBJS))
-	$(CC) $(MODULE_LDFLAGS) -o $@ $^
+repl-%: $(BUILDDIR)/$(REPLDIR)/%.o $(filter-out $(BUILDDIR)/$(SERVERDIR)/main.o, $(SERVER_OBJS)) $(COMMON_OBJS) libstui3.so
+	$(CC) $(GLOBAL_LDFLAGS) -L. -lstui3 -Wl,-rpath,'$$ORIGIN' -o $@ $^
 
 clean:
 	rm -rf $(BUILDDIR) stui3-server *.so $(REPL_ELFS)

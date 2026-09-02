@@ -14,8 +14,13 @@ extern "C" {
 typedef char stui3_module_symbol[STUI3_MODULE_SYMBOL_LENGTH];
 typedef uint32_t stui3_module_abi;
 
+#define STUI3_MODULE_DESCRIPTION_MAGIC_0 (0x9A)
+#define STUI3_MODULE_DESCRIPTION_MAGIC_1 (0x87)
+#define STUI3_MODULE_DESCRIPTION_MAGIC_2 (0x6E)
+#define STUI3_MODULE_DESCRIPTION_MAGIC_3 (0x95)
+
 struct stui3_module_description {
-	uint8_t magic[4]; /* 0x9A 0x87 0x6E 0x95 */
+	uint8_t magic[4];
 	stui3_module_abi minimum_abi;
 	stui3_module_abi deprecation_abi;
 	char name[STUI3_MODULE_NAME_LENGTH];

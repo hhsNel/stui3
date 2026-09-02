@@ -304,7 +304,7 @@ static void on_unload() {
 }
 
 struct stui3_module_description STUI3_MODULE_NAME(stui3_module) = {
-	.magic = { 0x9A, 0x87, 0x6E, 0x95 },
+	.magic = { STUI3_MODULE_DESCRIPTION_MAGIC_0, STUI3_MODULE_DESCRIPTION_MAGIC_1, STUI3_MODULE_DESCRIPTION_MAGIC_2, STUI3_MODULE_DESCRIPTION_MAGIC_3 },
 	.minimum_abi = 5,
 	.deprecation_abi = ABI_VERSION + 1,
 	.name = "dynlog",
