@@ -72,6 +72,8 @@ struct server_handshake {
 #define MSG_FLAG_INDEPENDENT (0x0001) /* the server is allowed to process this message even if it's not the next unACKed one */
 #define MSG_FLAG_PAYLOAD_CRC8 (0x0002) /* after the payload (not counting toward the payload_sz) there's a CRC8 checksum of the payload */
 
+#define MSG_PAYLOAD_MAX_LENGTH (0x4000) /* messages longer than this are ignored */
+
 #define MESSAGE_HEADER_OFF_MAGIC (0)
 #define MESSAGE_HEADER_SZ_MAGIC (4)
 #define MESSAGE_HEADER_OFF_FLAGS (4)

@@ -113,6 +113,8 @@ run_server(int socket_fd) {
 	struct client_context *ctxs, *new_ctxs;
 	unsigned int num_ctxs, cap_ctxs;
 	int ret;
+	struct pollfd tmp_pfd;
+	struct client_context tmp_ctx;
 
 	cap_pfds = 16;
 	pfds = malloc(cap_pfds * sizeof(struct pollfd));
@@ -139,12 +141,24 @@ run_server(int socket_fd) {
 				if(pfds[i].revents & (POLLIN | POLLOUT)) {
 					/* handle client */
 					ret = handle_client(&ctxs[i - 1]);
+#define CLEANUP do { \
+		tmp_pfd = pfds[i]; \
+		pfds[i] = pfds[num_pfds-1]; \
+		pfds[num_pfds-1] = tmp_pfd; \
+		tmp_ctx = ctxs[i-1]; \
+		ctxs[i] = ctxs[num_ctxs-1]; \
+		ctxs[num_ctxs-1] = tmp_ctx; \
+		--num_pfds; \
+		--num_ctxs; \
+		--i; \
+		continue; \
+	} while(0);
 					if(ret < 0) {
 						logf_stderr("Error while handling client: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
-						/* TODO: cleanup ctx */
+						CLEANUP;
 					}
 					if(ret == 0) {
-						/* TODO: cleanup ctx */
+						CLEANUP;
 					}
 				}
 			}

@@ -9,7 +9,7 @@ int main() {
 	int server_fd;
 	struct sockaddr_un addr;
 	int ret;
-	struct server_handshake s_hs;
+	struct client_protocol cp;
 
 	server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	memset(&addr, 0, sizeof(struct sockaddr_un));
@@ -19,12 +19,8 @@ int main() {
 
 	connect(server_fd, (struct sockaddr *)&addr, sizeof(struct sockaddr_un));
 
-	if(send_client_handshake(server_fd) < 0) {
-		fprintf(stderr, "couldn't send the client handshake\n");
-		return 1;
-	}
-	if((ret = recv_server_handshake(server_fd, &s_hs)) < 0) {
-		fprintf(stderr, "couldn't recv the server handshake\n");
+	if((ret = init_client_protocol(server_fd, &cp)) < 0) {
+		fprintf(stderr, "couldn't initialize the client protocol\n");
 		return 1;
 	}
 	if(ret > 0) {
