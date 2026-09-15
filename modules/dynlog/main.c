@@ -39,7 +39,7 @@ static pid_t forwarder_pid;
 static int mosi_pipe[2];
 static int miso_pipe[2];
 
-static void write_all(int fd, void const *buf, size_t sz) {
+static int write_all(int fd, void const *buf, size_t sz) {
 	int ret;
 	unsigned int retries;
 
@@ -47,14 +47,17 @@ static void write_all(int fd, void const *buf, size_t sz) {
 	while(sz > 0) {
 		if((ret = write(fd, buf, sz)) < 0) {
 			if(retries--) continue;
-			else return;
+			else return -1;
 		}
+		if(ret == 0) return -1;
 		sz -= ret;
 		buf = (char *)buf + ret;
 	}
+
+	return 0;
 }
 
-static void read_expected(int fd, void *buf, size_t sz) {
+static int read_expected(int fd, void *buf, size_t sz) {
 	int ret;
 	unsigned int retries;
 
@@ -62,11 +65,14 @@ static void read_expected(int fd, void *buf, size_t sz) {
 	while(sz > 0) {
 		if((ret = read(fd, buf, sz)) < 0) {
 			if(retries--) continue;
-			else return;
+			else return -1;
 		}
+		if(ret == 0) return -1;
 		sz -= ret;
 		buf = (char *)buf + ret;
 	}
+
+	return 0;
 }
 
 enum write_target_type {
@@ -129,37 +135,37 @@ static void forward(int stdout_fd, int stderr_fd) {
 				}
 			}
 			if(fds[2].revents & POLLIN) {
-				read_expected(mosi_pipe[0], &len, sizeof(len));
+				if(read_expected(mosi_pipe[0], &len, sizeof(len)) < 0) return;
 				if(len > sizeof(buf)) {
 					while(len > sizeof(buf)) {
-						read_expected(mosi_pipe[0], buf, sizeof(buf));
+						if(read_expected(mosi_pipe[0], buf, sizeof(buf)) < 0) return;
 						len -= sizeof(buf);
 					}
-					read_expected(mosi_pipe[0], buf, len);
+					if(read_expected(mosi_pipe[0], buf, len) < 0) return;
 					ret = 1;
 					snprintf(buf, sizeof(buf), "Too long: %u", (unsigned int)len);
 					len = strlen(buf);
-					write_all(miso_pipe[1], &ret, sizeof(ret));
-					write_all(miso_pipe[1], &len, sizeof(len));
-					write_all(miso_pipe[1], buf, len);
+					if(write_all(miso_pipe[1], &ret, sizeof(ret)) < 0) return;
+					if(write_all(miso_pipe[1], &len, sizeof(len)) < 0) return;
+					if(write_all(miso_pipe[1], buf, len) < 0) return;
 				} else {
 					/* handle command */
-					read_expected(mosi_pipe[0], buf, len);
+					if(read_expected(mosi_pipe[0], buf, len) < 0) return;
 					if(strcmp(buf, "__exit") == 0) {
 						while((ret = read(stdout_fd, buf, sizeof(buf))) > 0) handle_write(&wd_out, buf, ret);
 						while((ret = read(stderr_fd, buf, sizeof(buf))) > 0) handle_write(&wd_err, buf, ret);
 						ret = 0;
 						len = 0;
-						write_all(miso_pipe[1], &ret, sizeof(ret));
-						write_all(miso_pipe[1], &len, sizeof(len));
+						if(write_all(miso_pipe[1], &ret, sizeof(ret)) < 0) return;
+						if(write_all(miso_pipe[1], &len, sizeof(len)) < 0) return;
 						exit(0);
 					} else {
 						ret = 1;
 						snprintf(buf, sizeof(buf), "Unknown command");
 						len = strlen(buf);
-						write_all(miso_pipe[1], &ret, sizeof(ret));
-						write_all(miso_pipe[1], &len, sizeof(len));
-						write_all(miso_pipe[1], buf, len);
+						if(write_all(miso_pipe[1], &ret, sizeof(ret)) < 0) return;
+						if(write_all(miso_pipe[1], &len, sizeof(len)) < 0) return;
+						if(write_all(miso_pipe[1], buf, len) < 0) return;
 					}
 				}
 			}
@@ -214,6 +220,8 @@ static int on_load() {
 		close(err_pipe[1]);
 		close(mosi_pipe[1]);
 		close(miso_pipe[0]);
+		signal(SIGINT, SIG_IGN);
+		signal(SIGTERM, SIG_IGN);
 		forward(out_pipe[0], err_pipe[0]);
 		return -STUI3_EUPSTM;
 	} else {
@@ -258,24 +266,24 @@ static int exec_command(char const *const in, char *const out, size_t const out_
 	int ret;
 
 	len = strlen(in) + 1;
-	write_all(mosi_pipe[1], &len, sizeof(len));
-	write_all(mosi_pipe[1], in, len);
-	read_expected(miso_pipe[0], &ret, sizeof(ret));
-	read_expected(miso_pipe[0], &len, sizeof(len));
+	if(write_all(mosi_pipe[1], &len, sizeof(len)) < 0) return 127;
+	if(write_all(mosi_pipe[1], in, len) < 0) return 127;
+	if(read_expected(miso_pipe[0], &ret, sizeof(ret)) < 0) return 127;
+	if(read_expected(miso_pipe[0], &len, sizeof(len)) < 0) return 127;
 	if(len > sizeof(buf)) {
-		read_expected(miso_pipe[0], buf, sizeof(buf));
+		if(read_expected(miso_pipe[0], buf, sizeof(buf)) < 0) return 127;
 		len -= sizeof(buf);
 		if(out) {
 			strncpy(out, buf, MAX(out_sz-1, sizeof(buf)));
 			out[out_sz-1] = '\0';
 		}
 		while(len > sizeof(buf)) {
-			read_expected(miso_pipe[0], buf, sizeof(buf));
+			if(read_expected(miso_pipe[0], buf, sizeof(buf)) < 0) return 127;
 			len -= sizeof(buf);
 		}
-		read_expected(miso_pipe[0], buf, len);
+		if(read_expected(miso_pipe[0], buf, len) < 0) return 127;
 	} else {
-		read_expected(miso_pipe[0], buf, len);
+		if(read_expected(miso_pipe[0], buf, len) < 0) return 127;
 		if(out) {
 			strncpy(out, buf, MAX(out_sz-1, sizeof(buf)));
 			out[out_sz-1] = '\0';
@@ -288,7 +296,7 @@ static int exec_command(char const *const in, char *const out, size_t const out_
 static int command(char const *const in, char *const out, size_t const out_sz) {
 	if(in[0] == '_') {
 		snprintf(out, out_sz, "Blocked: _ at beginning of string (%.32s)", in);
-		return 1;
+		return 127;
 	}
 
 	return exec_command(in, out, out_sz);

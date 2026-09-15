@@ -12,14 +12,20 @@
 #include <sys/un.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 
-void run_server(int socket_fd);
+static void run_server(int socket_fd, sigset_t *orig_mask);
+static void handle_term_sig(int sig);
+
+static volatile sig_atomic_t running = 1;
 
 int main(int argc, char **argv) {
 	unsigned int i;
 	int ret;
 	int socket_fd;
 	struct sockaddr_un socket_address;
+	struct sigaction sa;
+	sigset_t block_mask, orig_mask;
 
 	char *sock_path = NULL;
 
@@ -55,6 +61,39 @@ int main(int argc, char **argv) {
 
 	logf_stdout("stui3 server starting up...\n");
 	logf_stdout("The socket path is: %s\n", sock_path);
+
+	sa.sa_handler = handle_term_sig;
+	sa.sa_flags = 0;
+	if(sigemptyset(&sa.sa_mask) < 0) {
+		logf_stderr("Could not sigemptyset sa.sa_mask: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		exit(1);
+	}
+	if(sigaction(SIGTERM, &sa, NULL) < 0) {
+		logf_stderr("Could not sigaction SIGTERM: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		exit(1);
+	}
+	if(sigaction(SIGINT, &sa, NULL) < 0) {
+		logf_stderr("Could not sigaction SIGINT: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		exit(1);
+	}
+	logf_stdout("Signal handling started successfully\n");
+	if(sigemptyset(&block_mask) < 0) {
+		logf_stderr("Could not sigemptyset block_mask: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		exit(1);
+	}
+	if(sigaddset(&block_mask, SIGTERM) < 0) {
+		logf_stderr("Could not sigaddset SIGTERM: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		exit(1);
+	}
+	if(sigaddset(&block_mask, SIGINT) < 0) {
+		logf_stderr("Could not sigaddset SIGINT: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		exit(1);
+	}
+	if(sigprocmask(SIG_BLOCK, &block_mask, &orig_mask) != 0) {
+		logf_stderr("Could not sigprocmask: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		exit(1);
+	}
+	logf_stdout("Signals ignored apart from ppoll\n");
 
 	if(access(sock_path, F_OK) == 0) {
 		logf_stderr("Socket path already exists: %s", sock_path);
@@ -93,7 +132,7 @@ int main(int argc, char **argv) {
 		goto shutdown;
 	}
 
-	run_server(socket_fd);
+	run_server(socket_fd, &orig_mask);
 
 shutdown:
 	logf_stdout("Shutting down the socket\n");
@@ -104,8 +143,8 @@ shutdown:
 	shutdown_symbols();
 }
 
-void
-run_server(int socket_fd) {
+static void
+run_server(int socket_fd, sigset_t *orig_mask) {
 	struct pollfd *pfds, *new_pfds;
 	unsigned int num_pfds, cap_pfds;
 	int client_fd;
@@ -135,8 +174,8 @@ run_server(int socket_fd) {
 	pfds[0].events = POLLIN;
 	num_pfds = 1;
 
-	while(1) {
-		if(poll(pfds, num_pfds, -1) > 0) {
+	while(running) {
+		if(ppoll(pfds, num_pfds, NULL, orig_mask) > 0) {
 			for(i = 1; i < num_pfds; ++i) {
 				if(pfds[i].revents & (POLLIN | POLLOUT)) {
 					/* handle client */
@@ -187,15 +226,31 @@ run_server(int socket_fd) {
 						}
 					}
 					pfds[num_pfds].fd = client_fd;
-					pfds[num_pfds].events = POLLIN | POLLOUT;
-					++num_pfds;
-					init_client_context(client_fd, &ctxs[num_ctxs]);
-					++num_ctxs;
+					if((ret = fcntl(client_fd, F_GETFL, 0)) >= 0) {
+						if(fcntl(client_fd, F_SETFL, ret | O_NONBLOCK) >= 0) {
+							pfds[num_pfds].events = POLLIN | POLLOUT;
+							++num_pfds;
+							init_client_context(client_fd, &ctxs[num_ctxs]);
+							++num_ctxs;
+						} else {
+							logf_stderr("Could not fcntl F_SETFL client_fd: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+							close(client_fd);
+						}
+					} else {
+						logf_stderr("Could not fcntl F_GETFL client_fd: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+						close(client_fd);
+					}
 				} else {
 					logf_stderr("Could not accept client_fd: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
 				}
 			}
 		}
 	}
+}
+
+static void
+handle_term_sig(int sig) {
+	(void)sig;
+	running = 0;
 }
 

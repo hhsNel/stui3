@@ -19,6 +19,7 @@ void logf_stdout(char *fmt, ...) {
 	sym_stdout_file = lookup_symbol("stdout_file");
 	if(sym_stdout_file) {
 		vfprintf(*sym_stdout_file, fmt, vas);
+		fflush(*sym_stdout_file);
 		return;
 	}
 
@@ -38,6 +39,7 @@ void logf_stdout(char *fmt, ...) {
 	}
 
 	vfprintf(stdout, fmt, vas);
+	fflush(stdout);
 
 	va_end(vas);
 }
@@ -55,6 +57,7 @@ void logf_stderr(char *fmt, ...) {
 	sym_stderr_file = lookup_symbol("stderr_file");
 	if(sym_stderr_file) {
 		vfprintf(*sym_stderr_file, fmt, vas);
+		fflush(*sym_stderr_file);
 		return;
 	}
 
@@ -74,6 +77,7 @@ void logf_stderr(char *fmt, ...) {
 	}
 
 	vfprintf(stderr, fmt, vas);
+	fflush(stderr);
 
 	va_end(vas);
 }
