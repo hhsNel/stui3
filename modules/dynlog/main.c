@@ -8,8 +8,9 @@
 #include <signal.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 
-#define MAX(A,B) (((A) > (B)) ? (A) : (B))
+#define MIN(A,B) (((A) > (B)) ? (A) : (B))
 
 static FILE *stdout_file;
 static int stdout_fd;
@@ -45,7 +46,7 @@ static int write_all(int fd, void const *buf, size_t sz) {
 
 	retries = 8;
 	while(sz > 0) {
-		if((ret = write(fd, buf, sz)) < 0) {
+		if((ret = write(fd, buf, sz)) < 0 && errno == EINTR) {
 			if(retries--) continue;
 			else return -1;
 		}
@@ -63,7 +64,7 @@ static int read_expected(int fd, void *buf, size_t sz) {
 
 	retries = 8;
 	while(sz > 0) {
-		if((ret = read(fd, buf, sz)) < 0) {
+		if((ret = read(fd, buf, sz)) < 0 && errno == EINTR) {
 			if(retries--) continue;
 			else return -1;
 		}
@@ -143,7 +144,7 @@ static void forward(int stdout_fd, int stderr_fd) {
 					}
 					if(read_expected(mosi_pipe[0], buf, len) < 0) return;
 					ret = 1;
-					snprintf(buf, sizeof(buf), "Too long: %u", (unsigned int)len);
+					snprintf(buf, sizeof(buf), "Too long");
 					len = strlen(buf);
 					if(write_all(miso_pipe[1], &ret, sizeof(ret)) < 0) return;
 					if(write_all(miso_pipe[1], &len, sizeof(len)) < 0) return;
@@ -265,7 +266,9 @@ static int exec_command(char const *const in, char *const out, size_t const out_
 	uint16_t len;
 	int ret;
 
-	len = strlen(in) + 1;
+	len = strlen(in);
+	if(len >= UINT16_MAX) return 127;
+	++len;
 	if(write_all(mosi_pipe[1], &len, sizeof(len)) < 0) return 127;
 	if(write_all(mosi_pipe[1], in, len) < 0) return 127;
 	if(read_expected(miso_pipe[0], &ret, sizeof(ret)) < 0) return 127;
@@ -274,7 +277,7 @@ static int exec_command(char const *const in, char *const out, size_t const out_
 		if(read_expected(miso_pipe[0], buf, sizeof(buf)) < 0) return 127;
 		len -= sizeof(buf);
 		if(out) {
-			strncpy(out, buf, MAX(out_sz-1, sizeof(buf)));
+			strncpy(out, buf, MIN(out_sz-1, sizeof(buf)));
 			out[out_sz-1] = '\0';
 		}
 		while(len > sizeof(buf)) {
@@ -285,7 +288,7 @@ static int exec_command(char const *const in, char *const out, size_t const out_
 	} else {
 		if(read_expected(miso_pipe[0], buf, len) < 0) return 127;
 		if(out) {
-			strncpy(out, buf, MAX(out_sz-1, sizeof(buf)));
+			strncpy(out, buf, MIN(out_sz-1, sizeof(buf)));
 			out[out_sz-1] = '\0';
 		}
 	}
