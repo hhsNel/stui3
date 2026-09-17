@@ -7,6 +7,8 @@
 int write_all(int fd, void const *buf, size_t sz);
 /* < 0 means error, 0 means success */
 int read_expected(int fd, void *buf, size_t sz);
+/* < 0 means error, 0 means success */
+int peek_expected(int fd, void *buf, size_t sz);
 
 #endif
 

@@ -16,7 +16,7 @@ struct client_protocol {
 	uint8_t server_expected_seqno;
 	uint8_t server_acked_seqno;
 	uint8_t server_processed_seqno;
-	uint32_t server_future_seqnos[4];
+	uint64_t server_future_seqnos[2];
 };
 
 /* < 0 means error, 0 means success, > 0 means incompatible */
