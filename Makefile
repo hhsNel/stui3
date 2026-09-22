@@ -1,5 +1,5 @@
 CC ?= cc
-ABI_VERSION := 14
+ABI_VERSION := 15
 
 empty :=
 space := $(empty) $(empty)
@@ -53,9 +53,9 @@ ifeq ($(DEBUG),1)
 endif
 
 SERVER_CFLAGS := $(GLOBAL_CFLAGS) -I$(SERVERDIR) -I$(COMMONDIR)
-LIB_CFLAGS := $(GLOBAL_CFLAGS) -I$(LIBDIR) -I$(COMMONDIR)
+LIB_CFLAGS := $(GLOBAL_CFLAGS) -I$(LIBDIR) -I$(COMMONDIR) -fPIC
 COMMON_CFLAGS := $(GLOBAL_CFLAGS) -I$(COMMONDIR)
-MODULE_CFLAGS := $(GLOBAL_CFLAGS) -I$(COMMONDIR) -I$(SERVERDIR)
+MODULE_CFLAGS := $(GLOBAL_CFLAGS) -I$(COMMONDIR) -I$(SERVERDIR) # -fPIC is added when building as module
 SERVER_LDFLAGS := $(GLOBAL_LDFLAGS)
 LIB_LDFLAGS := $(GLOBAL_LDFLAGS) -shared
 COMMON_LDFLAGS := $(GLOBAL_LDFLAGS)
@@ -73,7 +73,7 @@ MODULE_SOS += $(foreach LOADABLE_MODULE, $(LOADABLE_MODULES), $(LOADABLE_MODULE)
 all: stui3-server libstui3.so all-modules repl-elfs
 
 .config: FORCE
-	@if [ "$$(cat $@ 2>/dev/null || true)" != "$(CONFIG)" ]; then \
+	if [ "$$(cat $@ 2>/dev/null || true)" != "$(CONFIG)" ]; then \
 		echo "$(CONFIG)" > $@; \
 	fi
 

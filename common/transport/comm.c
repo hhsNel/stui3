@@ -81,7 +81,7 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 		case TP_STATE_IDLE:
 			diff = (uint8_t)(tp->own_seqno - tp->own_sent_seqno);
 			if(diff > 1 && (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno) < 128 && poll_events & POLLOUT) {
-#define NEXT_HEADER (tp->own_headers[(tp->own_sent_seqno+1)%128])
+#define NEXT_HEADER (tp->own_headers[tp->own_sent_seqno%128])
 #define SERIALIZE_HEADER \
 		NEXT_HEADER.seq_ack = tp->other_expected_seqno; \
 		memcpy(tp->w_head_buf+MESSAGE_HEADER_OFF_MAGIC, NEXT_HEADER.magic, MESSAGE_HEADER_SZ_MAGIC); \
@@ -99,18 +99,19 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 		NEXT_HEADER.crc8 = protocol_crc8(tp->w_head_buf, MESSAGE_HEADER_OFF_CRC); \
 		memcpy(tp->w_head_buf+MESSAGE_HEADER_OFF_CRC, &NEXT_HEADER.crc8, MESSAGE_HEADER_SZ_CRC); \
 		tp->progress = 0; \
-		tp->w_item_id = (tp->own_sent_seqno + 1) % 128; \
+		tp->w_item_id = tp->own_sent_seqno % 128; \
 		tp->state = TP_STATE_WRITING_HEADER;
 
 				SERIALIZE_HEADER;
 				break;
 			}
-			if(OTHER_UNPROCESSED_SLOTS(tp) < 128 && poll_events & POLLIN) {
+			if(!(tp->flags & TP_FLAG_NO_READ) && OTHER_UNPROCESSED_SLOTS(tp) < 128 && poll_events & POLLIN) {
 				tp->progress = 0;
 				tp->state = TP_STATE_READING_HEADER;
 				break;
 			}
-			if(diff > 1 && (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno) < 128 && poll_events & POLLOUT) {
+			tp->flags &= ~TP_FLAG_NO_READ;
+			if(diff > 0 && (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno) < 128 && poll_events & POLLOUT) {
 				SERIALIZE_HEADER;
 				break;
 #undef SERIALIZE_HEADER
@@ -134,8 +135,12 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 				return POLLOUT;
 			}
 			tp->flags &= ~TP_FLAG_SEND_ACK;
-			tp->progress = 0;
-			tp->state = TP_STATE_WRITING_BODY;
+			if(tp->own_headers[tp->w_item_id].payload_sz) {
+				tp->progress = 0;
+				tp->state = TP_STATE_WRITING_BODY;
+			} else {
+				tp->state = TP_STATE_IDLE;
+			}
 			break;
 
 		case TP_STATE_WRITING_BODY:
@@ -153,6 +158,11 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 
 		case TP_STATE_READING_HEADER:
 			r = read(tp->sock_fd, tp->w_head_buf + tp->progress, MESSAGE_HEADER_SIZE - tp->progress);
+			if(r < 0 && tp->progress == 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+				tp->state = TP_STATE_IDLE;
+				tp->flags |= TP_FLAG_NO_READ;
+				return POLLIN;
+			}
 			CHECK_R_ERRNO(POLLIN);
 			tp->progress += r;
 

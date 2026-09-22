@@ -6,6 +6,7 @@
 #include <stddef.h>
 
 #define TP_FLAG_SEND_ACK 0x80
+#define TP_FLAG_NO_READ 0x40
 #define TP_FLAG_SWAP_ENDIANNESS 0x01
 
 enum transport_protocol_state {

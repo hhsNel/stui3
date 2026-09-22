@@ -152,8 +152,6 @@ run_server(int socket_fd, sigset_t *orig_mask) {
 	struct client_context *ctxs, *new_ctxs;
 	unsigned int num_ctxs, cap_ctxs;
 	int ret;
-	struct pollfd tmp_pfd;
-	struct client_context tmp_ctx;
 
 	cap_pfds = 16;
 	pfds = malloc(cap_pfds * sizeof(struct pollfd));
@@ -181,12 +179,9 @@ run_server(int socket_fd, sigset_t *orig_mask) {
 					/* handle client */
 					ret = handle_client(&ctxs[i - 1]);
 #define CLEANUP do { \
-		tmp_pfd = pfds[i]; \
-		pfds[i] = pfds[num_pfds-1]; \
-		pfds[num_pfds-1] = tmp_pfd; \
-		tmp_ctx = ctxs[i-1]; \
-		ctxs[i] = ctxs[num_ctxs-1]; \
-		ctxs[num_ctxs-1] = tmp_ctx; \
+		close(pfds[i].fd); \
+		memcpy(&pfds[i],   &pfds[num_pfds-1], sizeof(struct pollfd)); \
+		memcpy(&ctxs[i-1], &ctxs[num_ctxs-1], sizeof(struct client_context)); \
 		--num_pfds; \
 		--num_ctxs; \
 		--i; \
@@ -214,6 +209,7 @@ run_server(int socket_fd, sigset_t *orig_mask) {
 							close(client_fd);
 							continue;
 						}
+						pfds = new_pfds;
 					}
 					if(num_ctxs == cap_ctxs) {
 						cap_ctxs *= 2;
@@ -224,6 +220,7 @@ run_server(int socket_fd, sigset_t *orig_mask) {
 							close(client_fd);
 							continue;
 						}
+						ctxs = new_ctxs;
 					}
 					pfds[num_pfds].fd = client_fd;
 					if((ret = fcntl(client_fd, F_GETFL, 0)) >= 0) {
