@@ -1,7 +1,7 @@
-#ifndef SERVE_HANDLE_CLIENT_H
-#define SERVE_HANDLE_CLIENT_H
+#ifndef SERVER_SERVE_HANDLE_CLIENT_H
+#define SERVER_SERVE_HANDLE_CLIENT_H
 
-#include "protocol/connection.h"
+#include "transport/connection.h"
 
 enum client_context_state {
 	CL_CTX_STATE_HANDSHAKE,

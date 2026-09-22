@@ -1,5 +1,5 @@
-#ifndef CRC8_H
-#define CRC8_H
+#ifndef COMMON_CRC8_H
+#define COMMON_CRC8_H
 
 #include <stdint.h>
 #include <stddef.h>

@@ -1,4 +1,4 @@
-#include "protocol/comm.h"
+#include "transport/client-init.h"
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -9,7 +9,7 @@ int main() {
 	int server_fd;
 	struct sockaddr_un addr;
 	int ret;
-	struct client_protocol cp;
+	struct transport_protocol tp;
 
 	server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	memset(&addr, 0, sizeof(struct sockaddr_un));
@@ -19,7 +19,7 @@ int main() {
 
 	connect(server_fd, (struct sockaddr *)&addr, sizeof(struct sockaddr_un));
 
-	if((ret = init_client_protocol(server_fd, &cp)) < 0) {
+	if((ret = client_handshake(server_fd, &tp)) < 0) {
 		fprintf(stderr, "couldn't initialize the client protocol\n");
 		return 1;
 	}

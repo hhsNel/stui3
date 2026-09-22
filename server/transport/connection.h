@@ -1,5 +1,5 @@
-#ifndef COMM_CONNECTION_H
-#define COMM_CONNECTION_H
+#ifndef SERVER_COMM_CONNECTION_H
+#define SERVER_COMM_CONNECTION_H
 
 #include "protocol.h"
 #include "util.h"

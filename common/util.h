@@ -1,5 +1,5 @@
-#ifndef UTIL_H
-#define UTIL_H
+#ifndef COMMON_UTIL_H
+#define COMMON_UTIL_H
 
 #define _STR(X) #X
 #define STR(X) _STR(X)

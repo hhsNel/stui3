@@ -1,5 +1,5 @@
-#ifndef SYMBOLS_SYMBOL_TABLE_H
-#define SYMBOLS_SYMBOL_TABLE_H
+#ifndef SERVER_SYMBOLS_SYMBOL_TABLE_H
+#define SERVER_SYMBOLS_SYMBOL_TABLE_H
 
 #include "stui3/module.h"
 

@@ -1,5 +1,5 @@
-#ifndef STUI3_H
-#define STUI3_H
+#ifndef STUI3_STUI3_H
+#define STUI3_STUI3_H
 
 #define STUI3_ENOENT (1)
 #define STUI3_EUPSTM (2)
