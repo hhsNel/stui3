@@ -11,8 +11,6 @@
 #include <errno.h>
 #include <poll.h>
 
-#define MIN(A,B) (((A) < (B)) ? (A) : (B))
-
 #define OWN_IN_FLIGHT(TP) ((uint8_t)((TP)->own_seqno - (TP)->own_acked_seqno))
 #define OWN_FREE_SLOTS(TP) (128 - OWN_IN_FLIGHT(TP))
 #define OTHER_UNPROCESSED_SLOTS(TP) ((uint8_t)((TP)->other_expected_seqno - (TP)->other_processed_seqno))
@@ -77,6 +75,7 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 	uint8_t ignore;
 	uint8_t ign_buf[0x100];
 	uint16_t tmp16;
+	struct ack_header ackh;
 
 	while(1) {
 		switch(tp->state) {
@@ -114,18 +113,28 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 				break;
 			}
 			tp->flags &= ~TP_FLAG_NO_READ;
-			if(diff == 0 && tp->flags & TP_FLAG_SEND_ACK) {
-				w_head.msg_flags = MSG_FLAG_INDEPENDENT | MSG_FLAG_NOACK;
-				w_head.payload_sz = 0;
-				w_head.payload_type = PAYLOAD_TYPE_ACKONLY;
-				send_msg(tp, w_head, NULL);
-			}
-			diff = (uint8_t)(tp->own_seqno - tp->own_sent_seqno);
 			if(diff > 0 && (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno) < 128 && poll_events & POLLOUT) {
 				SERIALIZE_HEADER;
 				break;
 #undef SERIALIZE_HEADER
 #undef NEXT_HEADER
+			}
+			if(tp->flags & TP_FLAG_SEND_ACK && poll_events & POLLOUT) {
+				ackh.magic[0] = ACKNOWLEDGE_HEADER_MAGIC_0;
+				ackh.magic[1] = ACKNOWLEDGE_HEADER_MAGIC_1;
+				ackh.magic[2] = ACKNOWLEDGE_HEADER_MAGIC_2;
+				ackh.magic[3] = ACKNOWLEDGE_HEADER_MAGIC_3;
+				ackh.seq_ack = tp->other_expected_seqno;
+				memcpy(tp->w_head_buf+ACK_HEADER_OFF_MAGIC, &ackh.magic, ACK_HEADER_SZ_MAGIC);
+				memcpy(tp->w_head_buf+ACK_HEADER_OFF_SEQACK, &ackh.seq_ack, ACK_HEADER_SZ_SEQACK);
+				ackh.crc8 = protocol_crc8(tp->w_head_buf, ACK_HEADER_OFF_CRC);
+				memcpy(tp->w_head_buf+ACK_HEADER_OFF_CRC, &ackh.crc8, ACK_HEADER_SZ_CRC);
+				tp->progress = 0;
+				tp->state = TP_STATE_WRITING_ACK;
+				break;
+			}
+			if(diff > 0 && (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno) < 128) {
+				return POLLOUT;
 			}
 			return 0;
 #define CHECK_R_ERRNO(R) \
@@ -148,7 +157,7 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 				tp->progress = 0;
 				tp->state = TP_STATE_WRITING_BODY;
 			} else {
-				tp->own_sent_seqno = tp->w_item_id + 1;
+				tp->own_sent_seqno = tp->own_headers[tp->w_item_id].seqno + 1;
 				tp->state = TP_STATE_IDLE;
 			}
 			break;
@@ -162,16 +171,22 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 			if(tp->progress < tp->own_headers[tp->w_item_id].payload_sz) {
 				return POLLOUT;
 			}
-			tp->own_sent_seqno = tp->w_item_id + 1;
+			tp->own_sent_seqno = tp->own_headers[tp->w_item_id].seqno + 1;
 			tp->state = TP_STATE_IDLE;
 			break;
 
 		case TP_STATE_READING_HEADER:
-			r = read(tp->sock_fd, tp->w_head_buf + tp->progress, MESSAGE_HEADER_SIZE - tp->progress);
-			if(r < 0 && tp->progress == 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-				tp->state = TP_STATE_IDLE;
-				tp->flags |= TP_FLAG_NO_READ;
-				break;
+			if(tp->progress >= MESSAGE_HEADER_OFF_MAGIC + MESSAGE_HEADER_SZ_MAGIC) {
+				r = read(tp->sock_fd, tp->w_head_buf + tp->progress, MESSAGE_HEADER_SIZE - tp->progress);
+			} else {
+				r = read(tp->sock_fd,
+						tp->w_head_buf + tp->progress,
+						MESSAGE_HEADER_OFF_MAGIC + MESSAGE_HEADER_SZ_MAGIC - tp->progress);
+				if(r < 0 && tp->progress == 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+					tp->state = TP_STATE_IDLE;
+					tp->flags |= TP_FLAG_NO_READ;
+					break;
+				}
 			}
 			CHECK_R_ERRNO(POLLIN);
 			tp->progress += r;
@@ -185,12 +200,19 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 				w_head.magic[1] != MESSAGE_HEADER_MAGIC_1 ||
 				w_head.magic[2] != MESSAGE_HEADER_MAGIC_2 ||
 				w_head.magic[3] != MESSAGE_HEADER_MAGIC_3 ) {
+				if( w_head.magic[0] == ACKNOWLEDGE_HEADER_MAGIC_0 &&
+					w_head.magic[1] == ACKNOWLEDGE_HEADER_MAGIC_1 &&
+					w_head.magic[2] == ACKNOWLEDGE_HEADER_MAGIC_2 &&
+					w_head.magic[3] == ACKNOWLEDGE_HEADER_MAGIC_3 ) {
+					tp->state = TP_STATE_READING_ACK;
+					break;
+				}
 				tp->state = TP_STATE_RESYNC;
 				break;
 			}
 
 			if(tp->progress < MESSAGE_HEADER_SIZE) {
-				return POLLIN;
+				break;
 			}
 			
 #define HANDLE_ENDIAN(BITS,VAL) \
@@ -220,7 +242,7 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 			}
 
 			diff = (uint8_t)(w_head.seq_ack - tp->own_acked_seqno);
-			if(diff < 128) {
+			if(diff < (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno)) {
 				tp->own_acked_seqno = w_head.seq_ack;
 			} else {
 				tp->state = TP_STATE_IGNORE;
@@ -269,6 +291,43 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 
 			tp->state = TP_STATE_IDLE;
 			break;
+
+		case TP_STATE_WRITING_ACK:
+			r = write(tp->sock_fd, tp->w_head_buf + tp->progress, ACK_HEADER_SIZE - tp->progress);
+			CHECK_R_ERRNO(POLLOUT);
+			tp->progress += r;
+			if(tp->progress < ACK_HEADER_SIZE) {
+				return POLLOUT;
+			}
+			tp->flags &= ~TP_FLAG_SEND_ACK;
+			tp->state = TP_STATE_IDLE;
+			break;
+
+		case TP_STATE_READING_ACK:
+			r = read(tp->sock_fd, tp->w_head_buf + tp->progress, ACK_HEADER_SIZE - tp->progress);
+			CHECK_R_ERRNO(POLLIN);
+			tp->progress += r;
+
+			if(tp->progress < ACK_HEADER_SIZE) {
+				return POLLIN;
+			}
+			
+			memcpy(&ackh.seq_ack, tp->w_head_buf + ACK_HEADER_OFF_SEQACK, ACK_HEADER_SZ_SEQACK);
+			memcpy(&ackh.crc8, tp->w_head_buf + ACK_HEADER_OFF_CRC, ACK_HEADER_SZ_CRC);
+
+			if(ackh.crc8 != protocol_crc8(tp->w_head_buf, ACK_HEADER_OFF_CRC)) {
+				tp->state = TP_STATE_RESYNC;
+				break;
+			}
+
+			diff = (uint8_t)(ackh.seq_ack - tp->own_acked_seqno);
+			if(diff < (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno)) {
+				tp->own_acked_seqno = ackh.seq_ack;
+			}
+
+			tp->state = TP_STATE_IDLE;
+			break;
+
 		case TP_STATE_RESYNC:
 			while(1) {
 				r = recv(tp->sock_fd, resync_buf, sizeof(resync_buf), MSG_PEEK | MSG_WAITALL);
@@ -276,10 +335,14 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 				if(r < 4) {
 					return POLLIN;
 				}
-				if (resync_buf[0] == MESSAGE_HEADER_MAGIC_0 &&
+				if( (resync_buf[0] == MESSAGE_HEADER_MAGIC_0 &&
 					resync_buf[1] == MESSAGE_HEADER_MAGIC_1 &&
 					resync_buf[2] == MESSAGE_HEADER_MAGIC_2 &&
-					resync_buf[3] == MESSAGE_HEADER_MAGIC_3) {
+					resync_buf[3] == MESSAGE_HEADER_MAGIC_3) ||
+					(resync_buf[0] == ACKNOWLEDGE_HEADER_MAGIC_0 &&
+					resync_buf[1] == ACKNOWLEDGE_HEADER_MAGIC_1 &&
+					resync_buf[2] == ACKNOWLEDGE_HEADER_MAGIC_2 &&
+					resync_buf[3] == ACKNOWLEDGE_HEADER_MAGIC_3) ) {
 					break;
 				}
 				r = read(tp->sock_fd, &ignore, 1);
@@ -287,6 +350,7 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 			}
 			tp->state = TP_STATE_IDLE;
 			break;
+
 		case TP_STATE_IGNORE:
 			if(tp->progress == 0) {
 				tp->state = TP_STATE_IDLE;

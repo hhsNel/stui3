@@ -2,6 +2,7 @@
 #define COMMON_TRANSPORT_COMM_H
 
 #include "protocol.h"
+#include "util.h"
 
 #include <stddef.h>
 
@@ -15,6 +16,8 @@ enum transport_protocol_state {
 	TP_STATE_WRITING_BODY,
 	TP_STATE_READING_HEADER,
 	TP_STATE_READING_BODY,
+	TP_STATE_WRITING_ACK,
+	TP_STATE_READING_ACK,
 	TP_STATE_RESYNC,
 	TP_STATE_IGNORE,
 };
@@ -24,7 +27,7 @@ struct transport_protocol {
 	uint8_t flags;
 
 	enum transport_protocol_state state;
-	uint8_t w_head_buf[MESSAGE_HEADER_SIZE];
+	uint8_t w_head_buf[MAX(MESSAGE_HEADER_SIZE,ACK_HEADER_SIZE)];
 	uint8_t w_item_id;
 	size_t progress;
 

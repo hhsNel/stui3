@@ -109,7 +109,26 @@ struct message_header {
 	uint8_t crc8; /* a CRC8 checksum of the serialized bytes, excluding this one */
 };
 
-#define PAYLOAD_TYPE_ACKONLY (0x0000)
+#define ACKNOWLEDGE_HEADER_MAGIC_0 (0x69)
+#define ACKNOWLEDGE_HEADER_MAGIC_1 (0xC9)
+#define ACKNOWLEDGE_HEADER_MAGIC_2 (0x27)
+#define ACKNOWLEDGE_HEADER_MAGIC_3 (0x97)
+
+#define ACK_HEADER_OFF_MAGIC (0)
+#define ACK_HEADER_SZ_MAGIC (4)
+#define ACK_HEADER_OFF_SEQACK (4)
+#define ACK_HEADER_SZ_SEQACK (1)
+#define ACK_HEADER_OFF_CRC (5)
+#define ACK_HEADER_SZ_CRC (1)
+#define ACK_HEADER_SIZE \
+	(ACK_HEADER_SZ_MAGIC + \
+	ACK_HEADER_SZ_SEQACK + \
+	ACK_HEADER_SZ_CRC)
+struct ack_header {
+	uint8_t magic[4];
+	uint8_t seq_ack;
+	uint8_t crc8;
+};
 
 #endif
 
