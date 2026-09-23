@@ -90,7 +90,7 @@ int main() {
 	do { puts("error"); continue; } while(0);
 
 		if(strncmp(buf, "help", 4) == 0) {
-			puts("help|exit|send0 <str>|send1 <str>|recv0|recv1|run0|run1");
+			puts("help|exit|send0 <str>|send1 <str>|recv0|recv1|run0|run1|junk0|junk1");
 		} else if(strncmp(buf, "send0", 5) == 0) {
 			sscanf(buf, "send0 %63s", arg);
 			head.payload_sz = strlen(arg);
@@ -119,6 +119,12 @@ int main() {
 			pfd.fd = fds[1];
 			poll(&pfd, 1, 0);
 			printf("ok "); print_ret(run_transport_protocol(&tps[1], pfd.revents));
+		} else if(strncmp(buf, "junk0", 5) == 0) {
+			c = -1;
+			printf("ok %d\n", (int)write(fds[0], &c, 1));
+		} else if(strncmp(buf, "junk1", 5) == 0) {
+			c = -1;
+			printf("ok %d\n", (int)write(fds[1], &c, 1));
 		} else if(strncmp(buf, "exit", 4) == 0) {
 			exit(0);
 		} else {

@@ -243,6 +243,9 @@ run_server(int socket_fd, sigset_t *orig_mask) {
 			}
 		}
 	}
+
+	free(pfds);
+	free(ctxs);
 }
 
 static void

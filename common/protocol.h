@@ -71,6 +71,7 @@ struct server_handshake {
 
 #define MSG_FLAG_INDEPENDENT (0x0001) /* the server is allowed to process this message even if it's not the next unACKed one */
 #define MSG_FLAG_PAYLOAD_CRC8 (0x0002) /* after the payload (not counting toward the payload_sz) there's a CRC8 checksum of the payload */
+#define MSG_FLAG_NOACK (0x0004) /* don't ACK this message */
 
 #define MSG_PAYLOAD_MAX_LENGTH (0x4000) /* messages longer than this are ignored */
 
@@ -107,6 +108,8 @@ struct message_header {
 	/* new seqnos: (next, next+127); wrapping */
 	uint8_t crc8; /* a CRC8 checksum of the serialized bytes, excluding this one */
 };
+
+#define PAYLOAD_TYPE_ACKONLY (0x0000)
 
 #endif
 

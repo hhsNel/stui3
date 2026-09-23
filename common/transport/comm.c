@@ -45,7 +45,9 @@ send_msg(struct transport_protocol *const tp, struct message_header const head, 
 	tp->own_headers[tp->own_seqno % 128].magic[2] = MESSAGE_HEADER_MAGIC_2;
 	tp->own_headers[tp->own_seqno % 128].magic[3] = MESSAGE_HEADER_MAGIC_3;
 	tp->own_headers[tp->own_seqno % 128].seqno = tp->own_seqno;
-	memcpy(tp->own_bodies[tp->own_seqno % 128], data, head.payload_sz);
+	if(head.payload_sz) {
+		memcpy(tp->own_bodies[tp->own_seqno % 128], data, head.payload_sz);
+	}
 	++tp->own_seqno;
 
 	return 0;
@@ -80,7 +82,7 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 		switch(tp->state) {
 		case TP_STATE_IDLE:
 			diff = (uint8_t)(tp->own_seqno - tp->own_sent_seqno);
-			if(diff > 1 && (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno) < 128 && poll_events & POLLOUT) {
+
 #define NEXT_HEADER (tp->own_headers[tp->own_sent_seqno%128])
 #define SERIALIZE_HEADER \
 		NEXT_HEADER.seq_ack = tp->other_expected_seqno; \
@@ -102,6 +104,7 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 		tp->w_item_id = tp->own_sent_seqno % 128; \
 		tp->state = TP_STATE_WRITING_HEADER;
 
+			if(diff > 1 && (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno) < 128 && poll_events & POLLOUT) {
 				SERIALIZE_HEADER;
 				break;
 			}
@@ -111,13 +114,19 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 				break;
 			}
 			tp->flags &= ~TP_FLAG_NO_READ;
+			if(diff == 0 && tp->flags & TP_FLAG_SEND_ACK) {
+				w_head.msg_flags = MSG_FLAG_INDEPENDENT | MSG_FLAG_NOACK;
+				w_head.payload_sz = 0;
+				w_head.payload_type = PAYLOAD_TYPE_ACKONLY;
+				send_msg(tp, w_head, NULL);
+			}
+			diff = (uint8_t)(tp->own_seqno - tp->own_sent_seqno);
 			if(diff > 0 && (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno) < 128 && poll_events & POLLOUT) {
 				SERIALIZE_HEADER;
 				break;
 #undef SERIALIZE_HEADER
 #undef NEXT_HEADER
 			}
-			/* TODO: if TP_FLAG_SEND_ACK is set, send a bare ACK */
 			return 0;
 #define CHECK_R_ERRNO(R) \
 		if(r == 0 || \
@@ -220,7 +229,9 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 			}
 
 			memcpy(&tp->other_headers[w_head.seqno], &w_head, sizeof(struct message_header));
-			tp->flags |= TP_FLAG_SEND_ACK;
+			if( !(w_head.msg_flags & MSG_FLAG_NOACK)) {
+				tp->flags |= TP_FLAG_SEND_ACK;
+			}
 			tp->state = TP_STATE_READING_BODY;
 			tp->w_item_id = w_head.seqno;
 			tp->progress = 0;

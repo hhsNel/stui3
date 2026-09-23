@@ -1,5 +1,5 @@
 CC ?= cc
-ABI_VERSION := 16
+ABI_VERSION := 17
 
 empty :=
 space := $(empty) $(empty)
@@ -48,13 +48,13 @@ endef
 
 DEBUG ?= 0
 ifeq ($(DEBUG),1)
-  GLOBAL_CFLAGS += -g
-  GLOBAL_LDFLAGS += -g
+  GLOBAL_CFLAGS += -g -fsanitize=address,undefined -fno-omit-frame-pointer
+  GLOBAL_LDFLAGS += -g -fsanitize=address,undefined
 endif
 
 SERVER_CFLAGS := $(GLOBAL_CFLAGS) -I$(SERVERDIR) -I$(COMMONDIR)
 LIB_CFLAGS := $(GLOBAL_CFLAGS) -I$(LIBDIR) -I$(COMMONDIR) -fPIC
-COMMON_CFLAGS := $(GLOBAL_CFLAGS) -I$(COMMONDIR)
+COMMON_CFLAGS := $(GLOBAL_CFLAGS) -I$(COMMONDIR) -fPIC
 MODULE_CFLAGS := $(GLOBAL_CFLAGS) -I$(COMMONDIR) -I$(SERVERDIR) # -fPIC is added when building as module
 SERVER_LDFLAGS := $(GLOBAL_LDFLAGS)
 LIB_LDFLAGS := $(GLOBAL_LDFLAGS) -shared

@@ -104,7 +104,11 @@ int init_symbols() {
 				scan_module(path, 0, 1);
 			}
 		}
+		if(closedir(d) < 0) {
+			return -STUI3_EUPSTM;
+		}
 	}
+
 
 	return 0;
 }
@@ -115,8 +119,12 @@ void shutdown_symbols() {
 	for(i = 0; i < num_modules; ++i) {
 		if(module_table[i].state == MODULE_BUILTIN) {
 			module_table[i].desc->unload_hook();
+			free(module_table[i].description);
+			free(module_table[i].exports);
 		} else {
 			deactivate_module(i, 0);
+			free(module_table[i].description);
+			free(module_table[i].exports);
 		}
 	}
 
@@ -410,8 +418,10 @@ static int scan_module(char const *const filename, int const force, int const cl
 		dlclose(dl_handle);
 		return -STUI3_EUPSTM;
 	}
-	strncpy(module_table[new_module].path, filename, MODULE_PATH_LEN - 1);
-	module_table[new_module].path[MODULE_PATH_LEN - 1] = '\0';
+	if(module_table[new_module].path != filename) {
+		strncpy(module_table[new_module].path, filename, MODULE_PATH_LEN - 1);
+		module_table[new_module].path[MODULE_PATH_LEN - 1] = '\0';
+	}
 	module_table[new_module].num_export_names = description->num_exports;
 	module_table[new_module].exports = malloc(description->num_exports * sizeof(stui3_module_symbol));
 	if(! module_table[new_module].exports) {
