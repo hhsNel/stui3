@@ -139,6 +139,7 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 				tp->progress = 0;
 				tp->state = TP_STATE_WRITING_BODY;
 			} else {
+				tp->own_sent_seqno = tp->w_item_id + 1;
 				tp->state = TP_STATE_IDLE;
 			}
 			break;
@@ -152,7 +153,7 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 			if(tp->progress < tp->own_headers[tp->w_item_id].payload_sz) {
 				return POLLOUT;
 			}
-			tp->own_sent_seqno = tp->w_item_id;
+			tp->own_sent_seqno = tp->w_item_id + 1;
 			tp->state = TP_STATE_IDLE;
 			break;
 
@@ -161,7 +162,7 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 			if(r < 0 && tp->progress == 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
 				tp->state = TP_STATE_IDLE;
 				tp->flags |= TP_FLAG_NO_READ;
-				return POLLIN;
+				break;
 			}
 			CHECK_R_ERRNO(POLLIN);
 			tp->progress += r;
@@ -243,7 +244,7 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 			if(diff < 64) {
 				tp->other_future_seqnos[0] |= 1ULL << diff;
 			}
-			else {
+			else if(diff < 128) {
 				tp->other_future_seqnos[1] |= 1ULL << (diff - 64);
 			}
 			while(tp->other_future_seqnos[0] & 1) {

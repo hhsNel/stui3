@@ -71,7 +71,7 @@ int main() {
 
 	head.msg_flags = 0;
 	head.payload_type = 0;
-	pfd.revents = POLLIN | POLLOUT;
+	pfd.events = POLLIN | POLLOUT;
 
 	if(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, fds) < 0) {
 		perror("socketpair");
@@ -83,7 +83,7 @@ int main() {
 	puts("ready");
 
 	while(1) {
-		if(! scanf("%2048[^\n]", buf)) exit(1);
+		if(! (r=scanf("%2047[^\n]", buf)) || r < 0) exit(1);
 		if(! scanf("%c", &c)) exit(1);
 
 #define ERROR() \
@@ -92,11 +92,11 @@ int main() {
 		if(strncmp(buf, "help", 4) == 0) {
 			puts("help|exit|send0 <str>|send1 <str>|recv0|recv1|run0|run1");
 		} else if(strncmp(buf, "send0", 5) == 0) {
-			sscanf(buf, "send0 %64s", arg);
+			sscanf(buf, "send0 %63s", arg);
 			head.payload_sz = strlen(arg);
 			printf("ok "); print_ret(send_msg(&tps[0], head, (uint8_t *)arg));
 		} else if(strncmp(buf, "send1", 5) == 0) {
-			sscanf(buf, "send1 %64s", arg);
+			sscanf(buf, "send1 %63s", arg);
 			head.payload_sz = strlen(arg);
 			printf("ok "); print_ret(send_msg(&tps[1], head, (uint8_t *)arg));
 		} else if(strncmp(buf, "recv0", 5) == 0) {
@@ -114,11 +114,11 @@ int main() {
 		} else if(strncmp(buf, "run0", 4) == 0) {
 			pfd.fd = fds[0];
 			poll(&pfd, 1, 0);
-			printf("ok "); print_ret(run_transport_protocol(&tps[0], pfd.events));
+			printf("ok "); print_ret(run_transport_protocol(&tps[0], pfd.revents));
 		} else if(strncmp(buf, "run1", 4) == 0) {
 			pfd.fd = fds[1];
 			poll(&pfd, 1, 0);
-			printf("ok "); print_ret(run_transport_protocol(&tps[1], pfd.events));
+			printf("ok "); print_ret(run_transport_protocol(&tps[1], pfd.revents));
 		} else if(strncmp(buf, "exit", 4) == 0) {
 			exit(0);
 		} else {

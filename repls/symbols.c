@@ -27,7 +27,7 @@ int main() {
 	puts("ready");
 
 	while(1) {
-		if(! scanf("%2048[^\n]", buf)) exit(1);
+		if(! (n=scanf("%2047[^\n]", buf)) || n < 0) exit(1);
 		if(! scanf("%c", &c)) exit(1);
 
 #define ERROR() \
@@ -36,13 +36,13 @@ int main() {
 		if(strncmp(buf, "help", 4) == 0) {
 			puts("help|lookups <symbol_name>|lookupm <module_name>|load <module_name>|unload <module_id>|providers <symbol_name>|set <symbol_name> <module_id>|num|info <module_id>|command <module_id> <cmd_string>|exit");
 		} else if(strncmp(buf, "lookups", 7) == 0) {
-			sscanf(buf, "lookups %64s", arg);
+			sscanf(buf, "lookups %63s", arg);
 			printf("ok %p\n", lookup_symbol(arg));
 		} else if(strncmp(buf, "lookupm", 7) == 0) {
-			sscanf(buf, "lookupm %64s", arg);
+			sscanf(buf, "lookupm %63s", arg);
 			printf("ok %d\n", lookup_module(arg));
 		} else if(strncmp(buf, "load", 4) == 0) {
-			sscanf(buf, "load %64s", arg);
+			sscanf(buf, "load %63s", arg);
 			printf("ok %d\n", load_module(arg));
 		} else if(strncmp(buf, "unload", 6) == 0) {
 			sscanf(buf, "unload %d", &argi);
@@ -51,7 +51,7 @@ int main() {
 		} else if(strncmp(buf, "exit", 4) == 0) {
 			exit(0);
 		} else if(strncmp(buf, "providers", 9) == 0) {
-			sscanf(buf, "providers %64s", arg);
+			sscanf(buf, "providers %63s", arg);
 			printf("ok");
 			n = (int)symbol_providers(arg, providers, sizeof(providers)/sizeof(*providers));
 			for(i = 0; i < n; ++i) {
@@ -59,7 +59,7 @@ int main() {
 			}
 			printf("\n");
 		} else if(strncmp(buf, "set", 3) == 0) {
-			sscanf(buf, "set %64s %d", arg, &argi);
+			sscanf(buf, "set %63s %d", arg, &argi);
 			printf("ok %d\n", set_symbol_provider(arg, argi));
 		} else if(strncmp(buf, "num", 3) == 0) {
 			printf("ok %zu\n", module_count());
@@ -76,7 +76,7 @@ int main() {
 			}
 			minfo.export_arg = 0;
 		} else if(strncmp(buf, "command", 7) == 0) {
-			sscanf(buf, "command %d %64s", &argi, arg);
+			sscanf(buf, "command %d %63s", &argi, arg);
 			printf("ok %d\n", module_command(argi, arg, desc_buf, sizeof(desc_buf)));
 			printf("feedback: %s\n", desc_buf);
 		} else {
