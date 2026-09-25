@@ -11,9 +11,14 @@
 #include <errno.h>
 #include <poll.h>
 
+#define MIN_REPEATS_UNTIL_RETRANSMISSION 2
+#define MAX_REPEATS_UNTIL_RETRANSMISSION 4
+
 #define OWN_IN_FLIGHT(TP) ((uint8_t)((TP)->own_seqno - (TP)->own_acked_seqno))
 #define OWN_FREE_SLOTS(TP) (128 - OWN_IN_FLIGHT(TP))
 #define OTHER_UNPROCESSED_SLOTS(TP) ((uint8_t)((TP)->other_expected_seqno - (TP)->other_processed_seqno))
+
+static void handle_incoming_seq_ack(struct transport_protocol *const tp, uint8_t const seq_ack);
 
 void
 init_transport_protocol(struct transport_protocol *const tp, int const sock_fd, uint8_t const flags) {
@@ -21,10 +26,13 @@ init_transport_protocol(struct transport_protocol *const tp, int const sock_fd, 
 	tp->sock_fd = sock_fd;
 	tp->flags = flags;
 	tp->own_seqno = 0;
+	tp->own_high_seqno = 0;
 	tp->own_sent_seqno = 0;
 	tp->own_acked_seqno = 0;
 	tp->other_expected_seqno = 0;
 	tp->other_processed_seqno = 0;
+	tp->ack_repeats = 0;
+	tp->ack_repeat_threshold = MIN_REPEATS_UNTIL_RETRANSMISSION;
 	memset(tp->other_future_seqnos, 0, sizeof(tp->other_future_seqnos));
 }
 
@@ -161,6 +169,8 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 				tp->state = TP_STATE_WRITING_BODY;
 			} else {
 				tp->own_sent_seqno = tp->own_headers[tp->w_item_id].seqno + 1;
+				diff = (uint8_t)(tp->own_sent_seqno - tp->own_high_seqno);
+				if(diff < 128) tp->own_high_seqno = tp->own_sent_seqno;
 				tp->state = TP_STATE_IDLE;
 			}
 			break;
@@ -175,6 +185,8 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 				return POLLOUT;
 			}
 			tp->own_sent_seqno = tp->own_headers[tp->w_item_id].seqno + 1;
+			diff = (uint8_t)(tp->own_sent_seqno - tp->own_high_seqno);
+			if(diff < 128) tp->own_high_seqno = tp->own_sent_seqno;
 			tp->state = TP_STATE_IDLE;
 			break;
 
@@ -244,14 +256,7 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 				break;
 			}
 
-			diff = (uint8_t)(w_head.seq_ack - tp->own_acked_seqno);
-			if(diff <= (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno)) {
-				tp->own_acked_seqno = w_head.seq_ack;
-			} else {
-				tp->state = TP_STATE_IGNORE;
-				tp->progress = w_head.payload_sz;
-				break;
-			}
+			handle_incoming_seq_ack(tp, w_head.seq_ack);
 
 			memcpy(&tp->other_headers[w_head.seqno], &w_head, sizeof(struct message_header));
 			if( !(w_head.msg_flags & MSG_FLAG_NOACK)) {
@@ -325,10 +330,7 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 				break;
 			}
 
-			diff = (uint8_t)(ackh.seq_ack - tp->own_acked_seqno);
-			if(diff <= (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno)) {
-				tp->own_acked_seqno = ackh.seq_ack;
-			}
+			handle_incoming_seq_ack(tp, ackh.seq_ack);
 
 			tp->state = TP_STATE_IDLE;
 			break;
@@ -371,6 +373,31 @@ run_transport_protocol(struct transport_protocol *const tp, int const poll_event
 				return POLLIN;
 			}
 		}
+	}
+}
+
+static void
+handle_incoming_seq_ack(struct transport_protocol *const tp, uint8_t const seq_ack) {
+	uint8_t diff;
+
+	diff = (uint8_t)(seq_ack - tp->own_acked_seqno);
+	if(diff <= (uint8_t)(tp->own_high_seqno - tp->own_acked_seqno)) {
+		tp->own_acked_seqno = seq_ack;
+	} else {
+		return;
+	}
+
+	if(seq_ack == tp->own_acked_seqno && tp->own_sent_seqno != tp->own_acked_seqno) {
+		++tp->ack_repeats;
+		if(tp->ack_repeats == tp->ack_repeat_threshold) {
+			tp->own_sent_seqno = seq_ack;
+			tp->ack_repeats = 0;
+			if(tp->ack_repeat_threshold < MAX_REPEATS_UNTIL_RETRANSMISSION) {
+				++tp->ack_repeat_threshold;
+			}
+		}
+	} else {
+		tp->ack_repeat_threshold = MIN_REPEATS_UNTIL_RETRANSMISSION;
 	}
 }
 

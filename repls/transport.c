@@ -8,6 +8,7 @@
 #include <sys/ioctl.h>
 #include <poll.h>
 #include <unistd.h>
+#include <inttypes.h>
 
 static struct transport_protocol tps[2];
 static int fds[2];
@@ -18,6 +19,8 @@ static char *state_names[] = {
 	[TP_STATE_WRITING_BODY] = "WRITING_BODY",
 	[TP_STATE_READING_HEADER] = "READING_HEADER",
 	[TP_STATE_READING_BODY] = "READING_BODY",
+	[TP_STATE_WRITING_LP] = "WRITING_LP",
+	[TP_STATE_READING_LP] = "READING_LP",
 	[TP_STATE_RESYNC] = "RESYNC",
 	[TP_STATE_IGNORE] = "IGNORE",
 };
@@ -59,6 +62,18 @@ print_ret(int r) {
 	}
 }
 
+static void
+info(struct transport_protocol const *const tp) {
+	printf("\tstate: %s\n", state_names[tp->state]);
+	printf("\town_seqno: %" PRIu8 "\n", tp->own_seqno);
+	printf("\town_high_seqno: %" PRIu8 "\n", tp->own_high_seqno);
+	printf("\town_sent_seqno: %" PRIu8 "\n", tp->own_sent_seqno);
+	printf("\town_acked_seqno: %" PRIu8 "\n", tp->own_acked_seqno);
+	printf("\tother_expected_seqno: %" PRIu8 "\n", tp->other_expected_seqno);
+	printf("\tack_repeats: %" PRIu8 "\n", tp->ack_repeats);
+	printf("\tack_repeat_threshold: %" PRIu8 "\n", tp->ack_repeat_threshold);
+}
+
 int main() {
 	char buf[2048];
 	char arg[64];
@@ -66,8 +81,6 @@ int main() {
 	struct message_header head;
 	struct pollfd pfd;
 	int r;
-
-	(void)state_names;
 
 	head.msg_flags = 0;
 	head.payload_type = 0;
@@ -90,7 +103,7 @@ int main() {
 	do { puts("error"); continue; } while(0);
 
 		if(strncmp(buf, "help", 4) == 0) {
-			puts("help|exit|send0 <str>|send1 <str>|recv0|recv1|run0|run1|junk0|junk1");
+			puts("help|exit|send0 <str>|send1 <str>|recv0|recv1|run0|run1|junk0|junk1|info0|info1");
 		} else if(strncmp(buf, "send0", 5) == 0) {
 			sscanf(buf, "send0 %63s", arg);
 			head.payload_sz = strlen(arg);
@@ -125,6 +138,12 @@ int main() {
 		} else if(strncmp(buf, "junk1", 5) == 0) {
 			c = -1;
 			printf("ok %d\n", (int)write(fds[1], &c, 1));
+		} else if(strncmp(buf, "info0", 5) == 0) {
+			printf("ok\n");
+			info(&tps[0]);
+		} else if(strncmp(buf, "info1", 5) == 0) {
+			printf("ok\n");
+			info(&tps[1]);
 		} else if(strncmp(buf, "exit", 4) == 0) {
 			exit(0);
 		} else {

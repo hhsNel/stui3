@@ -36,10 +36,13 @@ struct transport_protocol {
 	struct message_header other_headers[256];
 	uint8_t other_bodies[256][MSG_PAYLOAD_MAX_LENGTH];
 	uint8_t own_seqno;
+	uint8_t own_high_seqno;
 	uint8_t own_sent_seqno;
 	uint8_t own_acked_seqno;
 	uint8_t other_expected_seqno;
 	uint8_t other_processed_seqno;
+	uint8_t ack_repeats;
+	uint8_t ack_repeat_threshold;
 	uint64_t other_future_seqnos[2];
 };
 
