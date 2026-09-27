@@ -21,7 +21,7 @@ client_handshake(int const sock_fd, struct transport_protocol *const tp) {
 	if((r = send_client_handshake(sock_fd)) < 0) return r;
 	if((r = recv_server_handshake(sock_fd, &s_hs)) != 0) return r;
 
-	init_transport_protocol(tp, sock_fd, 0);
+	init_transport_protocol(tp, sock_fd, 0, 2);
 
 	return 0;
 }

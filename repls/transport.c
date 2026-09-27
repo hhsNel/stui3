@@ -65,6 +65,7 @@ print_ret(int r) {
 static void
 info(struct transport_protocol const *const tp) {
 	printf("\tstate: %s\n", state_names[tp->state]);
+	printf("\tticks: %" PRIu8 "/%" PRIu8 "\n", tp->current_ticks, tp->ticks_per_ack);
 	printf("\town_seqno: %" PRIu8 "\n", tp->own_seqno);
 	printf("\town_high_seqno: %" PRIu8 "\n", tp->own_high_seqno);
 	printf("\town_sent_seqno: %" PRIu8 "\n", tp->own_sent_seqno);
@@ -90,8 +91,8 @@ int main() {
 		perror("socketpair");
 		exit(1);
 	}
-	init_transport_protocol(&tps[0], fds[0], 0);
-	init_transport_protocol(&tps[1], fds[1], 0);
+	init_transport_protocol(&tps[0], fds[0], 0, 1);
+	init_transport_protocol(&tps[1], fds[1], 0, 1);
 
 	puts("ready");
 
@@ -103,7 +104,7 @@ int main() {
 	do { puts("error"); continue; } while(0);
 
 		if(strncmp(buf, "help", 4) == 0) {
-			puts("help|exit|send0 <str>|send1 <str>|recv0|recv1|run0|run1|junk0|junk1|info0|info1");
+			puts("help|exit|send0 <str>|send1 <str>|recv0|recv1|run0|run1|junk0|junk1|info0|info1|tick0|tick1");
 		} else if(strncmp(buf, "send0", 5) == 0) {
 			sscanf(buf, "send0 %63s", arg);
 			head.payload_sz = strlen(arg);
@@ -144,6 +145,12 @@ int main() {
 		} else if(strncmp(buf, "info1", 5) == 0) {
 			printf("ok\n");
 			info(&tps[1]);
+		} else if(strncmp(buf, "tick0", 5) == 0) {
+			printf("ok\n");
+			tick_protocol(&tps[0]);
+		} else if(strncmp(buf, "tick1", 5) == 0) {
+			printf("ok\n");
+			tick_protocol(&tps[1]);
 		} else if(strncmp(buf, "exit", 4) == 0) {
 			exit(0);
 		} else {

@@ -1,5 +1,5 @@
 CC ?= cc
-ABI_VERSION := 21
+ABI_VERSION := 22
 
 empty :=
 space := $(empty) $(empty)

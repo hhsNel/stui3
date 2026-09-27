@@ -25,6 +25,7 @@ enum transport_protocol_state {
 struct transport_protocol {
 	int sock_fd;
 	uint8_t flags;
+	int current_ticks, ticks_per_ack;
 
 	enum transport_protocol_state state;
 	uint8_t w_head_buf[MAX(MESSAGE_HEADER_SIZE,LP_HEADER_SIZE)];
@@ -33,26 +34,31 @@ struct transport_protocol {
 
 	struct message_header own_headers[128];
 	uint8_t own_bodies[128][MSG_PAYLOAD_MAX_LENGTH];
+
 	struct message_header other_headers[256];
 	uint8_t other_bodies[256][MSG_PAYLOAD_MAX_LENGTH];
+
 	uint8_t own_seqno;
 	uint8_t own_high_seqno;
 	uint8_t own_sent_seqno;
 	uint8_t own_acked_seqno;
+
 	uint8_t other_expected_seqno;
 	uint8_t other_processed_seqno;
+	uint64_t other_future_seqnos[2];
 	uint8_t ack_repeats;
 	uint8_t ack_repeat_threshold;
-	uint64_t other_future_seqnos[2];
 };
 
-void init_transport_protocol(struct transport_protocol *const tp, int const sock_fd, uint8_t const flags);
+void init_transport_protocol(struct transport_protocol *const tp, int const sock_fd, uint8_t const flags, int const ticks_per_ack);
 
 /* < 0 means error, 0 means success */
 int send_msg(struct transport_protocol *const tp, struct message_header const head, uint8_t const *const data);
 
 /* < 0 means error, 0 means success, > 0 means nothing to read */
 int recv_msg(struct transport_protocol *const tp, struct message_header *const head, uint8_t *const data);
+
+void tick_protocol(struct transport_protocol *const tp);
 
 /* < 0 means error, 0 means success, > 0 means POLL mask to retry */
 int run_transport_protocol(struct transport_protocol *const tp, int const poll_events);

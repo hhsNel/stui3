@@ -21,10 +21,12 @@
 static void handle_incoming_seq_ack(struct transport_protocol *const tp, uint8_t const seq_ack);
 
 void
-init_transport_protocol(struct transport_protocol *const tp, int const sock_fd, uint8_t const flags) {
+init_transport_protocol(struct transport_protocol *const tp, int const sock_fd, uint8_t const flags, int const ticks_per_ack) {
 	tp->state = TP_STATE_IDLE;
 	tp->sock_fd = sock_fd;
 	tp->flags = flags;
+	tp->current_ticks = 0;
+	tp->ticks_per_ack = ticks_per_ack;
 	tp->own_seqno = 0;
 	tp->own_high_seqno = 0;
 	tp->own_sent_seqno = 0;
@@ -71,6 +73,19 @@ recv_msg(struct transport_protocol *const tp, struct message_header *const head,
 	++tp->other_processed_seqno;
 
 	return 0;
+}
+
+void
+tick_protocol(struct transport_protocol *const tp) {
+	if(tp->ticks_per_ack == 0) {
+		tp->flags |= TP_FLAG_SEND_ACK;
+	} else if(tp->ticks_per_ack > 0) {
+		++tp->current_ticks;
+		if(tp->current_ticks >= tp->ticks_per_ack) {
+			tp->current_ticks -= tp->ticks_per_ack;
+			tp->flags |= TP_FLAG_SEND_ACK;
+		}
+	}
 }
 
 /* TODO: split this into some kind of run_in and run_out to avoid deadlocks */
