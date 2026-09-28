@@ -2,7 +2,7 @@
 
 #include "stui3.h"
 #include "endian.h"
-#include "crc8.h"
+#include "crc.h"
 #include "util.h"
 
 #include <arpa/inet.h>
@@ -14,28 +14,39 @@
 #define MIN_REPEATS_UNTIL_RETRANSMISSION 2
 #define MAX_REPEATS_UNTIL_RETRANSMISSION 4
 
-#define OWN_IN_FLIGHT(TP) ((uint8_t)((TP)->own_seqno - (TP)->own_acked_seqno))
-#define OWN_FREE_SLOTS(TP) (128 - OWN_IN_FLIGHT(TP))
+#define OWN_TAKEN_SLOTS(TP) ((uint8_t)((TP)->own_seqno - (TP)->own_acked_seqno))
+#define OWN_FREE_SLOTS(TP) (128 - OWN_TAKEN_SLOTS(TP))
+#define OWN_UNSENT_SLOTS(TP) ((uint8_t)((TP)->own_seqno - (TP)->own_sent_seqno))
 #define OTHER_UNPROCESSED_SLOTS(TP) ((uint8_t)((TP)->other_expected_seqno - (TP)->other_processed_seqno))
 
 static void handle_incoming_seq_ack(struct transport_protocol *const tp, uint8_t const seq_ack);
+/* < 0 means error, 0 means success, > 0 means POLL mask to retry */
+static int run_read(struct transport_protocol *const tp);
+static int run_write(struct transport_protocol *const tp);
 
 void
 init_transport_protocol(struct transport_protocol *const tp, int const sock_fd, uint8_t const flags, int const ticks_per_ack) {
-	tp->state = TP_STATE_IDLE;
 	tp->sock_fd = sock_fd;
 	tp->flags = flags;
 	tp->current_ticks = 0;
 	tp->ticks_per_ack = ticks_per_ack;
+
+	tp->wstate = TP_WSTATE_IDLE;
+	tp->wprogress = 0;
+
+	tp->rstate = TP_RSTATE_IDLE;
+	tp->rprogress = 0;
+
 	tp->own_seqno = 0;
 	tp->own_high_seqno = 0;
 	tp->own_sent_seqno = 0;
 	tp->own_acked_seqno = 0;
+	
 	tp->other_expected_seqno = 0;
 	tp->other_processed_seqno = 0;
+	memset(tp->other_future_seqnos, 0, sizeof(tp->other_future_seqnos));
 	tp->ack_repeats = 0;
 	tp->ack_repeat_threshold = MIN_REPEATS_UNTIL_RETRANSMISSION;
-	memset(tp->other_future_seqnos, 0, sizeof(tp->other_future_seqnos));
 }
 
 int
@@ -88,307 +99,26 @@ tick_protocol(struct transport_protocol *const tp) {
 	}
 }
 
-/* TODO: split this into some kind of run_in and run_out to avoid deadlocks */
 int
-run_transport_protocol(struct transport_protocol *const tp, int const poll_events) {
-	ssize_t r;
-	struct message_header w_head;
-	uint8_t diff;
-	uint8_t resync_buf[MESSAGE_HEADER_SZ_MAGIC];
-	uint8_t ignore;
-	uint8_t ign_buf[0x100];
-	uint16_t tmp16;
-	struct lp_header ackh;
+run_transport_protocol(struct transport_protocol *const tp) {
+	int sr, cr;
 
-	while(1) {
-		switch(tp->state) {
-		case TP_STATE_IDLE:
-			diff = (uint8_t)(tp->own_seqno - tp->own_sent_seqno);
-
-#define NEXT_HEADER (tp->own_headers[tp->own_sent_seqno%128])
-#define SERIALIZE_HEADER \
-		NEXT_HEADER.seq_ack = tp->other_expected_seqno; \
-		memcpy(tp->w_head_buf+MESSAGE_HEADER_OFF_MAGIC, NEXT_HEADER.magic, MESSAGE_HEADER_SZ_MAGIC); \
-		tmp16 = NEXT_HEADER.msg_flags; \
-		if(tp->flags & TP_FLAG_SWAP_ENDIANNESS) tmp16 = byteswap16(tmp16); \
-		memcpy(tp->w_head_buf+MESSAGE_HEADER_OFF_FLAGS, &tmp16, MESSAGE_HEADER_SZ_FLAGS); \
-		tmp16 = NEXT_HEADER.payload_sz; \
-		if(tp->flags & TP_FLAG_SWAP_ENDIANNESS) tmp16 = byteswap16(tmp16); \
-		memcpy(tp->w_head_buf+MESSAGE_HEADER_OFF_PLD_SZ, &tmp16, MESSAGE_HEADER_SZ_PLD_SZ); \
-		tmp16 = NEXT_HEADER.payload_type; \
-		if(tp->flags & TP_FLAG_SWAP_ENDIANNESS) tmp16 = byteswap16(tmp16); \
-		memcpy(tp->w_head_buf+MESSAGE_HEADER_OFF_PLD_TYPE, &tmp16, MESSAGE_HEADER_SZ_PLD_TYPE); \
-		memcpy(tp->w_head_buf+MESSAGE_HEADER_OFF_SEQNO, &NEXT_HEADER.seqno, MESSAGE_HEADER_SZ_SEQNO); \
-		memcpy(tp->w_head_buf+MESSAGE_HEADER_OFF_SEQACK, &NEXT_HEADER.seq_ack, MESSAGE_HEADER_SZ_SEQACK); \
-		NEXT_HEADER.crc8 = protocol_crc8(tp->w_head_buf, MESSAGE_HEADER_OFF_CRC); \
-		memcpy(tp->w_head_buf+MESSAGE_HEADER_OFF_CRC, &NEXT_HEADER.crc8, MESSAGE_HEADER_SZ_CRC); \
-		tp->progress = 0; \
-		tp->w_item_id = tp->own_sent_seqno % 128; \
-		tp->state = TP_STATE_WRITING_HEADER;
-
-			if(diff > 1 && (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno) < 128 && poll_events & POLLOUT) {
-				SERIALIZE_HEADER;
-				break;
-			}
-			if(!(tp->flags & TP_FLAG_NO_READ) && OTHER_UNPROCESSED_SLOTS(tp) < 128 && poll_events & POLLIN) {
-				tp->progress = 0;
-				tp->state = TP_STATE_READING_HEADER;
-				break;
-			}
-			tp->flags &= ~TP_FLAG_NO_READ;
-			if(diff > 0 && (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno) < 128 && poll_events & POLLOUT) {
-				SERIALIZE_HEADER;
-				break;
-#undef SERIALIZE_HEADER
-#undef NEXT_HEADER
-			}
-			if(tp->flags & TP_FLAG_SEND_ACK && poll_events & POLLOUT) {
-				ackh.magic[0] = LOW_PRF_HEADER_MAGIC_0;
-				ackh.magic[1] = LOW_PRF_HEADER_MAGIC_1;
-				ackh.magic[2] = LOW_PRF_HEADER_MAGIC_2;
-				ackh.magic[3] = LOW_PRF_HEADER_MAGIC_3;
-				ackh.flags = LP_FLAG_ACK_ACTIVE;
-				ackh.seq_ack = tp->other_expected_seqno;
-				memcpy(tp->w_head_buf+LP_HEADER_OFF_MAGIC, &ackh.magic, LP_HEADER_SZ_MAGIC);
-				memcpy(tp->w_head_buf+LP_HEADER_OFF_FLAGS, &ackh.flags, LP_HEADER_SZ_FLAGS);
-				memcpy(tp->w_head_buf+LP_HEADER_OFF_SEQACK, &ackh.seq_ack, LP_HEADER_SZ_SEQACK);
-				memcpy(tp->w_head_buf+LP_HEADER_OFF_SEQEXP, &ackh.seq_expected, LP_HEADER_SZ_SEQEXP);
-				ackh.crc8 = protocol_crc8(tp->w_head_buf, LP_HEADER_OFF_CRC);
-				memcpy(tp->w_head_buf+LP_HEADER_OFF_CRC, &ackh.crc8, LP_HEADER_SZ_CRC);
-				tp->progress = 0;
-				tp->state = TP_STATE_WRITING_LP;
-				break;
-			}
-			if(diff > 0 && (uint8_t)(tp->own_sent_seqno - tp->own_acked_seqno) < 128) {
-				return POLLOUT;
-			}
-			return 0;
-#define CHECK_R_ERRNO(R) \
-		if(r == 0 || \
-			(r < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) ) { \
-			return -STUI3_EUPSTM; \
-		} \
-		if(r < 0) { \
-			return (R); \
-		}
-		case TP_STATE_WRITING_HEADER:
-			r = write(tp->sock_fd, tp->w_head_buf + tp->progress, MESSAGE_HEADER_SIZE - tp->progress);
-			CHECK_R_ERRNO(POLLOUT);
-			tp->progress += r;
-			if(tp->progress < MESSAGE_HEADER_SIZE) {
-				return POLLOUT;
-			}
-			tp->flags &= ~TP_FLAG_SEND_ACK;
-			if(tp->own_headers[tp->w_item_id].payload_sz) {
-				tp->progress = 0;
-				tp->state = TP_STATE_WRITING_BODY;
-			} else {
-				tp->own_sent_seqno = tp->own_headers[tp->w_item_id].seqno + 1;
-				diff = (uint8_t)(tp->own_sent_seqno - tp->own_high_seqno);
-				if(diff < 128) tp->own_high_seqno = tp->own_sent_seqno;
-				tp->state = TP_STATE_IDLE;
-			}
-			break;
-
-		case TP_STATE_WRITING_BODY:
-			r = write(tp->sock_fd,
-				tp->own_bodies[tp->w_item_id] + tp->progress,
-				tp->own_headers[tp->w_item_id].payload_sz - tp->progress);
-			CHECK_R_ERRNO(POLLOUT);
-			tp->progress += r;
-			if(tp->progress < tp->own_headers[tp->w_item_id].payload_sz) {
-				return POLLOUT;
-			}
-			tp->own_sent_seqno = tp->own_headers[tp->w_item_id].seqno + 1;
-			diff = (uint8_t)(tp->own_sent_seqno - tp->own_high_seqno);
-			if(diff < 128) tp->own_high_seqno = tp->own_sent_seqno;
-			tp->state = TP_STATE_IDLE;
-			break;
-
-		case TP_STATE_READING_HEADER:
-			if(tp->progress >= MESSAGE_HEADER_OFF_MAGIC + MESSAGE_HEADER_SZ_MAGIC) {
-				r = read(tp->sock_fd, tp->w_head_buf + tp->progress, MESSAGE_HEADER_SIZE - tp->progress);
-			} else {
-				r = read(tp->sock_fd,
-						tp->w_head_buf + tp->progress,
-						MESSAGE_HEADER_OFF_MAGIC + MESSAGE_HEADER_SZ_MAGIC - tp->progress);
-				if(r < 0 && tp->progress == 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-					tp->state = TP_STATE_IDLE;
-					tp->flags |= TP_FLAG_NO_READ;
-					break;
-				}
-			}
-			CHECK_R_ERRNO(POLLIN);
-			tp->progress += r;
-
-			if(tp->progress < MESSAGE_HEADER_OFF_MAGIC + MESSAGE_HEADER_SZ_MAGIC) {
-				return POLLIN;
-			}
-
-			memcpy(&w_head.magic, tp->w_head_buf + MESSAGE_HEADER_OFF_MAGIC, MESSAGE_HEADER_SZ_MAGIC);
-			if( w_head.magic[0] != MESSAGE_HEADER_MAGIC_0 ||
-				w_head.magic[1] != MESSAGE_HEADER_MAGIC_1 ||
-				w_head.magic[2] != MESSAGE_HEADER_MAGIC_2 ||
-				w_head.magic[3] != MESSAGE_HEADER_MAGIC_3 ) {
-				if( w_head.magic[0] == LOW_PRF_HEADER_MAGIC_0 &&
-					w_head.magic[1] == LOW_PRF_HEADER_MAGIC_1 &&
-					w_head.magic[2] == LOW_PRF_HEADER_MAGIC_2 &&
-					w_head.magic[3] == LOW_PRF_HEADER_MAGIC_3 ) {
-					tp->state = TP_STATE_READING_LP;
-					break;
-				}
-				tp->state = TP_STATE_RESYNC;
-				break;
-			}
-
-			if(tp->progress < MESSAGE_HEADER_SIZE) {
-				break;
-			}
-			
-#define HANDLE_ENDIAN(BITS,VAL) \
-			do { \
-				if(tp->flags & TP_FLAG_SWAP_ENDIANNESS) { \
-					VAL = CONCAT(byteswap,BITS)(VAL); \
-				} \
-			} while(0);
-			memcpy(&w_head.msg_flags, tp->w_head_buf + MESSAGE_HEADER_OFF_FLAGS, MESSAGE_HEADER_SZ_FLAGS);
-			HANDLE_ENDIAN(16, w_head.msg_flags);
-			memcpy(&w_head.payload_sz, tp->w_head_buf + MESSAGE_HEADER_OFF_PLD_SZ, MESSAGE_HEADER_SZ_PLD_SZ);
-			HANDLE_ENDIAN(16, w_head.payload_sz);
-			memcpy(&w_head.payload_type, tp->w_head_buf + MESSAGE_HEADER_OFF_PLD_TYPE, MESSAGE_HEADER_SZ_PLD_TYPE);
-			HANDLE_ENDIAN(16, w_head.payload_type);
-			memcpy(&w_head.seqno, tp->w_head_buf + MESSAGE_HEADER_OFF_SEQNO, MESSAGE_HEADER_SZ_SEQNO);
-			memcpy(&w_head.seq_ack, tp->w_head_buf + MESSAGE_HEADER_OFF_SEQACK, MESSAGE_HEADER_SZ_SEQACK);
-			memcpy(&w_head.crc8, tp->w_head_buf + MESSAGE_HEADER_OFF_CRC, MESSAGE_HEADER_SZ_CRC);
-
-			if(w_head.crc8 != protocol_crc8(tp->w_head_buf, MESSAGE_HEADER_OFF_CRC)) {
-				tp->state = TP_STATE_RESYNC;
-				break;
-			}
-			if(w_head.payload_sz > MSG_PAYLOAD_MAX_LENGTH) {
-				tp->state = TP_STATE_IGNORE;
-				tp->progress = w_head.payload_sz;
-				break;
-			}
-
-			handle_incoming_seq_ack(tp, w_head.seq_ack);
-
-			memcpy(&tp->other_headers[w_head.seqno], &w_head, sizeof(struct message_header));
-			if( !(w_head.msg_flags & MSG_FLAG_NOACK)) {
-				tp->flags |= TP_FLAG_SEND_ACK;
-			}
-			tp->state = TP_STATE_READING_BODY;
-			tp->w_item_id = w_head.seqno;
-			tp->progress = 0;
-			break;
-
-		case TP_STATE_READING_BODY:
-			if(tp->progress < tp->other_headers[tp->w_item_id].payload_sz) {
-				r = read(tp->sock_fd,
-					tp->other_bodies[tp->w_item_id] + tp->progress,
-					tp->other_headers[tp->w_item_id].payload_sz - tp->progress);
-				CHECK_R_ERRNO(POLLIN);
-				tp->progress += r;
-
-				if(tp->progress < tp->other_headers[tp->w_item_id].payload_sz) {
-					return POLLIN;
-				}
-			}
-
-			diff = tp->other_headers[tp->w_item_id].seqno - tp->other_expected_seqno;
-			
-			if(diff < 64) {
-				tp->other_future_seqnos[0] |= 1ULL << diff;
-			}
-			else if(diff < 128) {
-				tp->other_future_seqnos[1] |= 1ULL << (diff - 64);
-			}
-			while(tp->other_future_seqnos[0] & 1) {
-				++tp->other_expected_seqno;
-				tp->other_future_seqnos[0] >>= 1;
-				if(tp->other_future_seqnos[1] & 1) {
-					tp->other_future_seqnos[0] |= 0x8000000000000000;
-				}
-				tp->other_future_seqnos[1] >>= 1;
-			}
-
-			tp->state = TP_STATE_IDLE;
-			break;
-
-		case TP_STATE_WRITING_LP:
-			r = write(tp->sock_fd, tp->w_head_buf + tp->progress, LP_HEADER_SIZE - tp->progress);
-			CHECK_R_ERRNO(POLLOUT);
-			tp->progress += r;
-			if(tp->progress < LP_HEADER_SIZE) {
-				return POLLOUT;
-			}
-			tp->flags &= ~TP_FLAG_SEND_ACK;
-			tp->state = TP_STATE_IDLE;
-			break;
-
-		case TP_STATE_READING_LP:
-			r = read(tp->sock_fd, tp->w_head_buf + tp->progress, LP_HEADER_SIZE - tp->progress);
-			CHECK_R_ERRNO(POLLIN);
-			tp->progress += r;
-
-			if(tp->progress < LP_HEADER_SIZE) {
-				return POLLIN;
-			}
-			
-			memcpy(&ackh.flags, tp->w_head_buf + LP_HEADER_OFF_FLAGS, LP_HEADER_SZ_FLAGS);
-			memcpy(&ackh.seq_ack, tp->w_head_buf + LP_HEADER_OFF_SEQACK, LP_HEADER_SZ_SEQACK);
-			memcpy(&ackh.seq_expected, tp->w_head_buf + LP_HEADER_OFF_SEQEXP, LP_HEADER_SZ_SEQEXP);
-			memcpy(&ackh.crc8, tp->w_head_buf + LP_HEADER_OFF_CRC, LP_HEADER_SZ_CRC);
-
-			if(ackh.crc8 != protocol_crc8(tp->w_head_buf, LP_HEADER_OFF_CRC)) {
-				tp->state = TP_STATE_RESYNC;
-				break;
-			}
-
-			handle_incoming_seq_ack(tp, ackh.seq_ack);
-
-			tp->state = TP_STATE_IDLE;
-			break;
-
-		case TP_STATE_RESYNC:
-			while(1) {
-				r = recv(tp->sock_fd, resync_buf, sizeof(resync_buf), MSG_PEEK | MSG_WAITALL);
-				CHECK_R_ERRNO(POLLIN);
-				if(r < 4) {
-					return POLLIN;
-				}
-				if( (resync_buf[0] == MESSAGE_HEADER_MAGIC_0 &&
-					resync_buf[1] == MESSAGE_HEADER_MAGIC_1 &&
-					resync_buf[2] == MESSAGE_HEADER_MAGIC_2 &&
-					resync_buf[3] == MESSAGE_HEADER_MAGIC_3) ||
-					(resync_buf[0] == LOW_PRF_HEADER_MAGIC_0 &&
-					resync_buf[1] == LOW_PRF_HEADER_MAGIC_1 &&
-					resync_buf[2] == LOW_PRF_HEADER_MAGIC_2 &&
-					resync_buf[3] == LOW_PRF_HEADER_MAGIC_3) ) {
-					break;
-				}
-				r = read(tp->sock_fd, &ignore, 1);
-				CHECK_R_ERRNO(POLLIN);
-			}
-			tp->state = TP_STATE_IDLE;
-			break;
-
-		case TP_STATE_IGNORE:
-			if(tp->progress == 0) {
-				tp->state = TP_STATE_IDLE;
-				break;
-			}
-			r = read(tp->sock_fd, ign_buf, MIN((size_t)tp->progress, (size_t)sizeof(ign_buf)));
-			CHECK_R_ERRNO(POLLIN);
-			tp->progress -= r;
-			if(! tp->progress) {
-				tp->state = TP_STATE_IDLE;
-				break;
-			} else {
-				return POLLIN;
-			}
-		}
+	cr = 0;
+	sr = run_read(tp);
+	if(sr < 0) {
+		return sr;
+	} else if(sr > 0) {
+		cr |= sr;
 	}
+
+	sr = run_write(tp);
+	if(sr < 0) {
+		return sr;
+	} else if(sr > 0) {
+		cr |= sr;
+	}
+
+	return cr;
 }
 
 static void
@@ -402,7 +132,7 @@ handle_incoming_seq_ack(struct transport_protocol *const tp, uint8_t const seq_a
 		return;
 	}
 
-	if(seq_ack == tp->own_acked_seqno && tp->own_sent_seqno != tp->own_acked_seqno) {
+	if(diff == 0 && tp->own_sent_seqno != tp->own_acked_seqno) {
 		++tp->ack_repeats;
 		if(tp->ack_repeats == tp->ack_repeat_threshold) {
 			tp->own_sent_seqno = seq_ack;
@@ -412,7 +142,310 @@ handle_incoming_seq_ack(struct transport_protocol *const tp, uint8_t const seq_a
 			}
 		}
 	} else {
+		tp->ack_repeats = 0;
 		tp->ack_repeat_threshold = MIN_REPEATS_UNTIL_RETRANSMISSION;
+	}
+}
+
+#define CHECK_R_ERRNO(RET) \
+		if(r == 0 || \
+			(r < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) ) { \
+			return -STUI3_EUPSTM; \
+		} \
+		if(r < 0) { \
+			return (RET); \
+		}
+
+static int
+run_read(struct transport_protocol *const tp) {
+	ssize_t r;
+	struct message_header msg_head;
+	struct lp_header lp_head;
+	uint8_t tmp8;
+	uint16_t tmp16;
+	uint32_t tmp32;
+	size_t additional_sz, consumed;
+	int diff;
+	int payload_intact;
+
+	while(1) {
+		switch(tp->rstate) {
+		case TP_RSTATE_IDLE:
+#define MAGIC_CMP(BUF, PREFIX) \
+	((BUF)[0] == CONCAT(PREFIX,_0) && \
+	(BUF)[1] == CONCAT(PREFIX,_1) && \
+	(BUF)[2] == CONCAT(PREFIX,_2) && \
+	(BUF)[3] == CONCAT(PREFIX,_3))
+
+			if( tp->rprogress >= MESSAGE_HEADER_OFF_MAGIC+MESSAGE_HEADER_SZ_MAGIC &&
+				MAGIC_CMP(tp->rbuf+MESSAGE_HEADER_OFF_MAGIC, MESSAGE_HEADER_MAGIC) ) {
+				if(tp->rprogress < MESSAGE_HEADER_SIZE) {
+					tp->rstate = TP_RSTATE_READING;
+					break;
+				}
+
+				memcpy(msg_head.magic, tp->rbuf+MESSAGE_HEADER_OFF_MAGIC, MESSAGE_HEADER_SZ_MAGIC);
+#define VAL16(VALUE, VNAME) \
+	do { \
+		if(tp->flags & TP_FLAG_SWAP_ENDIANNESS) { \
+			memcpy(&tmp16, tp->rbuf+CONCAT(MESSAGE_HEADER_OFF_,VNAME), 2); \
+			VALUE = byteswap16(tmp16); \
+		} else { \
+			memcpy(&VALUE, tp->rbuf+CONCAT(MESSAGE_HEADER_OFF_,VNAME), 2); \
+		} \
+	} while(0);
+				VAL16(msg_head.msg_flags, FLAGS);
+				VAL16(msg_head.payload_sz, PLD_SZ);
+				VAL16(msg_head.payload_type, PLD_TYPE);
+#undef VAL16
+				memcpy(&msg_head.seqno, tp->rbuf+MESSAGE_HEADER_OFF_SEQNO, MESSAGE_HEADER_SZ_SEQNO);
+				memcpy(&msg_head.seq_ack, tp->rbuf+MESSAGE_HEADER_OFF_SEQACK, MESSAGE_HEADER_SZ_SEQACK);
+				memcpy(&msg_head.crc8, tp->rbuf+MESSAGE_HEADER_OFF_CRC, MESSAGE_HEADER_SZ_CRC);
+
+				if(msg_head.crc8 != protocol_crc8(tp->rbuf, MESSAGE_HEADER_OFF_CRC)) {
+					tp->rstate = TP_RSTATE_RESYNC;
+					break;
+				}
+				if(msg_head.payload_sz > MSG_PAYLOAD_MAX_LENGTH) {
+					tp->rstate = TP_RSTATE_RESYNC;
+					break;
+				}
+				switch(msg_head.msg_flags & MSG_FLAGS_REDUNDANCY_MASK) {
+				case MSG_FLAG_PAYLOAD_NO_REDUNDANCY:
+					additional_sz = 0;
+					break;
+				case MSG_FLAG_PAYLOAD_CRC8:
+					additional_sz = 1;
+					break;
+				case MSG_FLAG_PAYLOAD_CRC32:
+					additional_sz = 4;
+					break;
+				default:
+					/* value reserved */
+					additional_sz = 0;
+					break;
+				}
+				consumed = MESSAGE_HEADER_SIZE + msg_head.payload_sz + additional_sz;
+				if(tp->rprogress < consumed) {
+					tp->rstate = TP_RSTATE_READING;
+					break;
+				}
+
+				payload_intact = 1;
+				switch(msg_head.msg_flags & MSG_FLAGS_REDUNDANCY_MASK) {
+				case MSG_FLAG_PAYLOAD_NO_REDUNDANCY:
+					break;
+				case MSG_FLAG_PAYLOAD_CRC8:
+					memcpy(&tmp8, tp->rbuf + MESSAGE_HEADER_SIZE + msg_head.payload_sz, 1);
+					if(tmp8 != protocol_crc8(tp->rbuf + MESSAGE_HEADER_SIZE, msg_head.payload_sz)) {
+						payload_intact = 0;
+					}
+					break;
+				case MSG_FLAG_PAYLOAD_CRC32:
+					memcpy(&tmp32, tp->rbuf + MESSAGE_HEADER_SIZE + msg_head.payload_sz, 4);
+					if(tmp32 != protocol_crc32(tp->rbuf + MESSAGE_HEADER_SIZE, msg_head.payload_sz)) {
+						payload_intact = 0;
+					}
+					break;
+				default:
+					/* value reserved */
+					break;
+				}
+				if(! payload_intact) {
+					tp->rstate = TP_RSTATE_RESYNC;
+					break;
+				}
+
+				handle_incoming_seq_ack(tp, msg_head.seq_ack);
+
+				if( !(msg_head.msg_flags & MSG_FLAG_NOACK)) {
+					tp->flags |= TP_FLAG_SEND_ACK;
+				}
+
+				diff = (uint8_t)(msg_head.seqno - tp->other_expected_seqno);
+				if(diff < 64) {
+					tp->other_future_seqnos[0] |= 1ULL << diff;
+				}
+				else if(diff < 128) {
+					tp->other_future_seqnos[1] |= 1ULL << (diff - 64);
+				}
+				while(tp->other_future_seqnos[0] & 1) {
+					++tp->other_expected_seqno;
+					tp->other_future_seqnos[0] >>= 1;
+					if(tp->other_future_seqnos[1] & 1) {
+						tp->other_future_seqnos[0] |= 0x8000000000000000;
+					}
+					tp->other_future_seqnos[1] >>= 1;
+				}
+
+				memcpy(&tp->other_headers[msg_head.seqno], &msg_head, sizeof(struct message_header));
+				memcpy(&tp->other_bodies[msg_head.seqno], tp->rbuf+MESSAGE_HEADER_SIZE, msg_head.payload_sz);
+
+				tp->rprogress -= consumed;
+				if(tp->rprogress) {
+					memmove(tp->rbuf, tp->rbuf + consumed, tp->rprogress);
+				}
+				break;
+			} else if( tp->rprogress >= LP_HEADER_OFF_MAGIC+LP_HEADER_SZ_MAGIC &&
+				MAGIC_CMP(tp->rbuf+LP_HEADER_OFF_MAGIC, LP_HEADER_MAGIC) ) {
+				if(tp->rprogress < LP_HEADER_SIZE) {
+					tp->rstate = TP_RSTATE_READING;
+					break;
+				}
+
+				memcpy(lp_head.magic, tp->rbuf+LP_HEADER_OFF_MAGIC, LP_HEADER_SZ_MAGIC);
+				memcpy(&lp_head.flags, tp->rbuf+LP_HEADER_OFF_FLAGS, LP_HEADER_SZ_FLAGS);
+				memcpy(&lp_head.seq_ack, tp->rbuf+LP_HEADER_OFF_SEQACK, LP_HEADER_SZ_SEQACK);
+				memcpy(&lp_head.crc8, tp->rbuf+LP_HEADER_OFF_CRC, LP_HEADER_SZ_CRC);
+
+				if(lp_head.crc8 != protocol_crc8(tp->rbuf, LP_HEADER_OFF_CRC)) {
+					tp->rstate = TP_RSTATE_RESYNC;
+					break;
+				}
+
+				if(lp_head.flags & LP_FLAG_ACK_ACTIVE) {
+					handle_incoming_seq_ack(tp, lp_head.seq_ack);
+				}
+
+				tp->rprogress -= LP_HEADER_SIZE;
+				if(tp->rprogress) {
+					memmove(tp->rbuf, tp->rbuf + LP_HEADER_SIZE, tp->rprogress);
+				}
+				break;
+			} else if(tp->rprogress >= MESSAGE_HEADER_OFF_MAGIC+MESSAGE_HEADER_SZ_MAGIC &&
+				tp->rprogress >= LP_HEADER_OFF_MAGIC+LP_HEADER_SZ_MAGIC) {
+				tp->rstate = TP_RSTATE_RESYNC;
+				break;
+			} else {
+				tp->rstate = TP_RSTATE_READING;
+				break;
+			}
+			break;
+
+		case TP_RSTATE_READING:
+			r = recv(tp->sock_fd,
+				tp->rbuf + tp->rprogress,
+				sizeof(tp->rbuf) - tp->rprogress,
+				MSG_DONTWAIT);
+			CHECK_R_ERRNO(POLLIN);
+
+			tp->rprogress += r;
+
+			tp->rstate = TP_RSTATE_IDLE;
+			break;
+
+		case TP_RSTATE_RESYNC:
+			if(tp->rprogress >= MESSAGE_HEADER_OFF_MAGIC+MESSAGE_HEADER_SZ_MAGIC &&
+				tp->rprogress >= LP_HEADER_OFF_MAGIC+LP_HEADER_SZ_MAGIC) {
+				--tp->rprogress;
+				if(tp->rprogress) {
+					memmove(tp->rbuf, tp->rbuf + 1, tp->rprogress);
+				}
+			} else {
+				r = recv(tp->sock_fd, tp->rbuf, sizeof(tp->rbuf), MSG_DONTWAIT);
+				CHECK_R_ERRNO(POLLIN);
+
+				tp->rprogress += r;
+			}
+
+			if( tp->rprogress >= MESSAGE_HEADER_OFF_MAGIC+MESSAGE_HEADER_SZ_MAGIC &&
+				MAGIC_CMP(tp->rbuf+MESSAGE_HEADER_OFF_MAGIC, MESSAGE_HEADER_MAGIC) ) {
+				tp->rstate = TP_RSTATE_IDLE;
+				break;
+			} else if( tp->rprogress >= LP_HEADER_OFF_MAGIC+LP_HEADER_SZ_MAGIC &&
+				MAGIC_CMP(tp->rbuf+LP_HEADER_OFF_MAGIC, LP_HEADER_MAGIC) ) {
+				tp->rstate = TP_RSTATE_IDLE;
+				break;
+			}
+
+			break;
+		}
+	}
+}
+
+static int
+run_write(struct transport_protocol *const tp) {
+	ssize_t r;
+	uint16_t tmp16;
+	struct lp_header lp_head;
+
+	while(1) {
+		switch(tp->wstate) {
+		case TP_WSTATE_IDLE:
+			if(OWN_UNSENT_SLOTS(tp) > 0) {
+#define NEXT_HEADER (tp->own_headers[tp->own_sent_seqno%128])
+#define VAL16(VALUE, VNAME) \
+	do { \
+		if(tp->flags & TP_FLAG_SWAP_ENDIANNESS) { \
+			tmp16 = byteswap16(VALUE); \
+			memcpy(tp->wbuf+CONCAT(MESSAGE_HEADER_OFF_,VNAME), &tmp16, 2); \
+		} else { \
+			memcpy(tp->wbuf+CONCAT(MESSAGE_HEADER_OFF_,VNAME), &VALUE, 2); \
+		} \
+	} while(0);
+				NEXT_HEADER.seq_ack = tp->other_expected_seqno;
+				memcpy(tp->wbuf+MESSAGE_HEADER_OFF_MAGIC, NEXT_HEADER.magic, MESSAGE_HEADER_SZ_MAGIC);
+				VAL16(NEXT_HEADER.msg_flags, FLAGS);
+				VAL16(NEXT_HEADER.payload_sz, PLD_SZ);
+				VAL16(NEXT_HEADER.payload_type, PLD_TYPE);
+				memcpy(tp->wbuf+MESSAGE_HEADER_OFF_SEQNO, &NEXT_HEADER.seqno, MESSAGE_HEADER_SZ_SEQNO);
+				memcpy(tp->wbuf+MESSAGE_HEADER_OFF_SEQACK, &NEXT_HEADER.seq_ack, MESSAGE_HEADER_SZ_SEQACK);
+				NEXT_HEADER.crc8 = protocol_crc8(tp->wbuf, MESSAGE_HEADER_OFF_CRC);
+				memcpy(tp->wbuf+MESSAGE_HEADER_OFF_CRC, &NEXT_HEADER.crc8, MESSAGE_HEADER_SZ_CRC);
+
+				memcpy(tp->wbuf+MESSAGE_HEADER_SIZE, tp->own_bodies[tp->own_sent_seqno%128], NEXT_HEADER.payload_sz);
+
+				tp->wstate = TP_WSTATE_WRITING;
+				tp->wprogress = 0;
+				tp->wlength = MESSAGE_HEADER_SIZE + NEXT_HEADER.payload_sz;
+				++tp->own_sent_seqno;
+				if((int8_t)(tp->own_sent_seqno - tp->own_high_seqno) > 0) {
+					tp->own_high_seqno = tp->own_sent_seqno;
+				}
+				tp->flags &= ~TP_FLAG_SEND_ACK;
+				break;
+#undef NEXT_HEADER
+#undef VAL16
+			}
+
+			if(tp->flags & TP_FLAG_SEND_ACK) {
+				lp_head.magic[0] = LP_HEADER_MAGIC_0;
+				lp_head.magic[1] = LP_HEADER_MAGIC_1;
+				lp_head.magic[2] = LP_HEADER_MAGIC_2;
+				lp_head.magic[3] = LP_HEADER_MAGIC_3;
+				lp_head.flags = LP_FLAG_ACK_ACTIVE;
+				lp_head.seq_ack = tp->other_expected_seqno;
+
+				memcpy(tp->wbuf+LP_HEADER_OFF_MAGIC, lp_head.magic, LP_HEADER_SZ_MAGIC);
+				memcpy(tp->wbuf+LP_HEADER_OFF_FLAGS, &lp_head.flags, LP_HEADER_SZ_FLAGS);
+				memcpy(tp->wbuf+LP_HEADER_OFF_SEQACK, &lp_head.seq_ack, LP_HEADER_SZ_SEQACK);
+
+				lp_head.crc8 = protocol_crc8(tp->wbuf, LP_HEADER_OFF_CRC);
+				memcpy(tp->wbuf+LP_HEADER_OFF_CRC, &lp_head.crc8, LP_HEADER_SZ_CRC);
+				tp->wstate = TP_WSTATE_WRITING;
+				tp->wprogress = 0;
+				tp->wlength = LP_HEADER_SIZE;
+				tp->flags &= ~TP_FLAG_SEND_ACK;
+				break;
+			}
+
+			return 0;
+
+		case TP_WSTATE_WRITING:
+			r = send(tp->sock_fd,
+				tp->wbuf + tp->wprogress,
+				tp->wlength - tp->wprogress,
+				MSG_DONTWAIT | MSG_NOSIGNAL);
+			CHECK_R_ERRNO(POLLOUT);
+
+			tp->wprogress += r;
+			if(tp->wprogress < tp->wlength) {
+				return POLLOUT;
+			}
+
+			tp->wstate = TP_WSTATE_IDLE;
+			break;
+		}
 	}
 }
 

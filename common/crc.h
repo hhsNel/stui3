@@ -6,5 +6,7 @@
 
 uint8_t protocol_crc8(uint8_t const *data, size_t len);
 
+uint32_t protocol_crc32(uint8_t const *data, size_t len);
+
 #endif
 

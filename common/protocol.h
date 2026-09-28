@@ -1,6 +1,8 @@
 #ifndef COMMON_PROTOCOL_H
 #define COMMON_PROTOCOL_H
 
+#include "util.h"
+
 #include <stdint.h>
 
 #define PROTOCOL_VERSION (0)
@@ -9,6 +11,10 @@
 #define CRC8_INITIAL (0x00)
 /* no reflection */
 #define CRC8_XOR (0x00)
+#define CRC32_POLYNOMIAL (0xEDB88320)
+#define CRC32_INITIAL (0xFFFFFFFF)
+/* reflection */
+#define CRC32_XOR (0xFFFFFFFF)
 
 #define CLIENT_HANDSHAKE_MAGIC_0 (0xB3)
 #define CLIENT_HANDSHAKE_MAGIC_1 (0x78)
@@ -70,10 +76,14 @@ struct server_handshake {
 #define MESSAGE_HEADER_MAGIC_3 (0xB7)
 
 #define MSG_FLAG_INDEPENDENT (0x0001) /* the server is allowed to process this message even if it's not the next unACKed one */
+#define MSG_FLAGS_REDUNDANCY_MASK (0x0006) /* mask for the following 4 flags */
+#define MSG_FLAG_PAYLOAD_NO_REDUNDANCY (0x0000) /* assume no errors */
 #define MSG_FLAG_PAYLOAD_CRC8 (0x0002) /* after the payload (not counting toward the payload_sz) there's a CRC8 checksum of the payload */
-#define MSG_FLAG_NOACK (0x0004) /* don't ACK this message */
+#define MSG_FLAG_PAYLOAD_CRC32 (0x0004) /* after the payload (not counting toward the payload_sz) there's a CRC32 checksum of the payload, in client's byte order */
+/* value (0x0006) reserved for possible future redundancy options */
+#define MSG_FLAG_NOACK (0x0008) /* don't ACK this message */
 
-#define MSG_PAYLOAD_MAX_LENGTH (0x4000) /* messages longer than this are ignored */
+#define MSG_PAYLOAD_MAX_LENGTH (0x4000) /* maximum payload length */
 
 #define MESSAGE_HEADER_OFF_MAGIC (0)
 #define MESSAGE_HEADER_SZ_MAGIC (4)
@@ -109,13 +119,12 @@ struct message_header {
 	uint8_t crc8; /* a CRC8 checksum of the serialized bytes, excluding this one */
 };
 
-#define LOW_PRF_HEADER_MAGIC_0 (0x96)
-#define LOW_PRF_HEADER_MAGIC_1 (0x8C)
-#define LOW_PRF_HEADER_MAGIC_2 (0x29)
-#define LOW_PRF_HEADER_MAGIC_3 (0xAD)
+#define LP_HEADER_MAGIC_0 (0x96)
+#define LP_HEADER_MAGIC_1 (0x8C)
+#define LP_HEADER_MAGIC_2 (0x29)
+#define LP_HEADER_MAGIC_3 (0xAD)
 
 #define LP_FLAG_ACK_ACTIVE (0x01)
-#define LP_FLAG_EXPECTED_ACTIVE (0x02)
 
 #define LP_HEADER_OFF_MAGIC (0)
 #define LP_HEADER_SZ_MAGIC (4)
@@ -123,23 +132,23 @@ struct message_header {
 #define LP_HEADER_SZ_FLAGS (1)
 #define LP_HEADER_OFF_SEQACK (5)
 #define LP_HEADER_SZ_SEQACK (1)
-#define LP_HEADER_OFF_SEQEXP (6)
-#define LP_HEADER_SZ_SEQEXP (1)
-#define LP_HEADER_OFF_CRC (7)
+#define LP_HEADER_OFF_CRC (6)
 #define LP_HEADER_SZ_CRC (1)
 #define LP_HEADER_SIZE \
 	(LP_HEADER_SZ_MAGIC + \
 	LP_HEADER_SZ_FLAGS + \
 	LP_HEADER_SZ_SEQACK + \
-	LP_HEADER_SZ_SEQEXP + \
 	LP_HEADER_SZ_CRC)
 struct lp_header {
 	uint8_t magic[4];
 	uint8_t flags;
 	uint8_t seq_ack; /* standalone ack */
-	uint8_t seq_expected; /* one or more messages dropped */
 	uint8_t crc8;
 };
+
+#define PROTOCOL_MAX_TRANSMISSION_SIZE MAX( \
+		MESSAGE_HEADER_SIZE + MSG_PAYLOAD_MAX_LENGTH + 4, /* 4 bytes of crc32 */ \
+		LP_HEADER_SIZE)
 
 #endif
 

@@ -13,16 +13,14 @@
 static struct transport_protocol tps[2];
 static int fds[2];
 
-static char *state_names[] = {
-	[TP_STATE_IDLE] = "IDLE",
-	[TP_STATE_WRITING_HEADER] = "WRITING_HEADER",
-	[TP_STATE_WRITING_BODY] = "WRITING_BODY",
-	[TP_STATE_READING_HEADER] = "READING_HEADER",
-	[TP_STATE_READING_BODY] = "READING_BODY",
-	[TP_STATE_WRITING_LP] = "WRITING_LP",
-	[TP_STATE_READING_LP] = "READING_LP",
-	[TP_STATE_RESYNC] = "RESYNC",
-	[TP_STATE_IGNORE] = "IGNORE",
+static char *wstate_names[] = {
+	[TP_WSTATE_IDLE] = "IDLE",
+	[TP_WSTATE_WRITING] = "WRITING",
+};
+static char *rstate_names[] = {
+	[TP_RSTATE_IDLE] = "IDLE",
+	[TP_RSTATE_READING] = "READING",
+	[TP_RSTATE_RESYNC] = "RESYNC",
 };
 
 static char *
@@ -64,7 +62,8 @@ print_ret(int r) {
 
 static void
 info(struct transport_protocol const *const tp) {
-	printf("\tstate: %s\n", state_names[tp->state]);
+	printf("\twstate: %s\n", wstate_names[tp->wstate]);
+	printf("\trstate: %s\n", rstate_names[tp->rstate]);
 	printf("\tticks: %" PRIu8 "/%" PRIu8 "\n", tp->current_ticks, tp->ticks_per_ack);
 	printf("\town_seqno: %" PRIu8 "\n", tp->own_seqno);
 	printf("\town_high_seqno: %" PRIu8 "\n", tp->own_high_seqno);
@@ -104,7 +103,7 @@ int main() {
 	do { puts("error"); continue; } while(0);
 
 		if(strncmp(buf, "help", 4) == 0) {
-			puts("help|exit|send0 <str>|send1 <str>|recv0|recv1|run0|run1|junk0|junk1|info0|info1|tick0|tick1");
+			puts("help|exit|send0 <str>|send1 <str>|recv0|recv1|run0|run1|junk0|junk1|info0|info1|tick0|tick1|drop0|drop1");
 		} else if(strncmp(buf, "send0", 5) == 0) {
 			sscanf(buf, "send0 %63s", arg);
 			head.payload_sz = strlen(arg);
@@ -128,11 +127,11 @@ int main() {
 		} else if(strncmp(buf, "run0", 4) == 0) {
 			pfd.fd = fds[0];
 			poll(&pfd, 1, 0);
-			printf("ok "); print_ret(run_transport_protocol(&tps[0], pfd.revents));
+			printf("ok "); print_ret(run_transport_protocol(&tps[0]));
 		} else if(strncmp(buf, "run1", 4) == 0) {
 			pfd.fd = fds[1];
 			poll(&pfd, 1, 0);
-			printf("ok "); print_ret(run_transport_protocol(&tps[1], pfd.revents));
+			printf("ok "); print_ret(run_transport_protocol(&tps[1]));
 		} else if(strncmp(buf, "junk0", 5) == 0) {
 			c = -1;
 			printf("ok %d\n", (int)write(fds[0], &c, 1));
@@ -151,6 +150,10 @@ int main() {
 		} else if(strncmp(buf, "tick1", 5) == 0) {
 			printf("ok\n");
 			tick_protocol(&tps[1]);
+		} else if(strncmp(buf, "drop0", 5) == 0) {
+			printf("ok %d\n", (int)read(fds[0], &c, 1));
+		} else if(strncmp(buf, "drop1", 5) == 0) {
+			printf("ok %d\n", (int)read(fds[1], &c, 1));
 		} else if(strncmp(buf, "exit", 4) == 0) {
 			exit(0);
 		} else {

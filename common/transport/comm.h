@@ -10,16 +10,15 @@
 #define TP_FLAG_NO_READ 0x40
 #define TP_FLAG_SWAP_ENDIANNESS 0x01
 
-enum transport_protocol_state {
-	TP_STATE_IDLE,
-	TP_STATE_WRITING_HEADER,
-	TP_STATE_WRITING_BODY,
-	TP_STATE_READING_HEADER,
-	TP_STATE_READING_BODY,
-	TP_STATE_WRITING_LP,
-	TP_STATE_READING_LP,
-	TP_STATE_RESYNC,
-	TP_STATE_IGNORE,
+enum transport_protocol_wstate {
+	TP_WSTATE_IDLE,
+	TP_WSTATE_WRITING,
+};
+
+enum transport_protocol_rstate {
+	TP_RSTATE_IDLE,
+	TP_RSTATE_READING,
+	TP_RSTATE_RESYNC,
 };
 
 struct transport_protocol {
@@ -27,10 +26,13 @@ struct transport_protocol {
 	uint8_t flags;
 	int current_ticks, ticks_per_ack;
 
-	enum transport_protocol_state state;
-	uint8_t w_head_buf[MAX(MESSAGE_HEADER_SIZE,LP_HEADER_SIZE)];
-	uint8_t w_item_id;
-	size_t progress;
+	enum transport_protocol_wstate wstate;
+	size_t wprogress, wlength;
+	uint8_t wbuf[PROTOCOL_MAX_TRANSMISSION_SIZE];
+
+	enum transport_protocol_rstate rstate;
+	size_t rprogress;
+	uint8_t rbuf[PROTOCOL_MAX_TRANSMISSION_SIZE + 4]; /* 4 additional bytes for resync */
 
 	struct message_header own_headers[128];
 	uint8_t own_bodies[128][MSG_PAYLOAD_MAX_LENGTH];
@@ -61,7 +63,7 @@ int recv_msg(struct transport_protocol *const tp, struct message_header *const h
 void tick_protocol(struct transport_protocol *const tp);
 
 /* < 0 means error, 0 means success, > 0 means POLL mask to retry */
-int run_transport_protocol(struct transport_protocol *const tp, int const poll_events);
+int run_transport_protocol(struct transport_protocol *const tp);
 
 #endif
 
