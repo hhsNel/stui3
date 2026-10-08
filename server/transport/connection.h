@@ -18,7 +18,6 @@ struct protocol_connection {
 	uint64_t (*ctohll)(uint64_t);
 };
 
-
 void init_connection(int const client_fd, struct protocol_connection *const conn);
 /* < 0 means error, 0 means success, > 0 means continue */
 int handshake_connection(struct protocol_connection *const conn);

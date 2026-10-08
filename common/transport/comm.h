@@ -57,7 +57,7 @@ void init_transport_protocol(struct transport_protocol *const tp, int const sock
 /* < 0 means error, 0 means success */
 int send_msg(struct transport_protocol *const tp, struct message_header const head, uint8_t const *const data);
 
-/* < 0 means error, 0 means success, > 0 means nothing to read */
+/* 0 means success, > 0 means nothing to read */
 int recv_msg(struct transport_protocol *const tp, struct message_header *const head, uint8_t *const data);
 
 void tick_protocol(struct transport_protocol *const tp);

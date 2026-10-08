@@ -327,6 +327,9 @@ run_read(struct transport_protocol *const tp) {
 				tp->rbuf + tp->rprogress,
 				sizeof(tp->rbuf) - tp->rprogress,
 				MSG_DONTWAIT);
+			if(r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+				return 0;
+			}
 			CHECK_R_ERRNO(POLLIN);
 
 			tp->rprogress += r;

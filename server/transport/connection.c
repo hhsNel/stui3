@@ -9,6 +9,7 @@
 #include <errno.h>
 
 static int respond(struct protocol_connection *const conn, uint8_t reason);
+static int send_handshake(struct protocol_connection *const conn);
 static int send_response(struct protocol_connection *const conn);
 static uint16_t identity16(uint16_t host);
 static uint32_t identity32(uint32_t host);
@@ -25,9 +26,41 @@ init_connection(int const client_fd, struct protocol_connection *const conn) {
 
 int
 handshake_connection(struct protocol_connection *const conn) {
-	ssize_t r;
-
 	if(conn->hs_rw >= CLIENT_HANDSHAKE_SIZE) return send_response(conn);
+
+	return send_handshake(conn);
+}
+
+static int
+respond(struct protocol_connection *const conn, uint8_t reason) {
+	conn->s_handshake.magic[0] = SERVER_HANDSHAKE_MAGIC_0;
+	conn->s_handshake.magic[1] = SERVER_HANDSHAKE_MAGIC_1;
+	conn->s_handshake.magic[2] = SERVER_HANDSHAKE_MAGIC_2;
+	conn->s_handshake.magic[3] = SERVER_HANDSHAKE_MAGIC_3;
+	conn->s_handshake.network_order_version = htons(PROTOCOL_VERSION);
+	conn->s_handshake.rejected = reason;
+	memset(&conn->s_handshake.network_order_caps, 0, sizeof(conn->s_handshake.network_order_caps));
+
+	memcpy(conn->hs_buf+SERVER_HANDSHAKE_OFF_MAGIC,
+		&conn->s_handshake.magic,
+		SERVER_HANDSHAKE_SZ_MAGIC);
+	memcpy(conn->hs_buf+SERVER_HANDSHAKE_OFF_N_VERSION,
+		&conn->s_handshake.network_order_version,
+		SERVER_HANDSHAKE_SZ_N_VERSION);
+	memcpy(conn->hs_buf+SERVER_HANDSHAKE_OFF_REJECTED,
+		&conn->s_handshake.rejected,
+		SERVER_HANDSHAKE_SZ_REJECTED);
+	memcpy(conn->hs_buf+SERVER_HANDSHAKE_OFF_N_CAPS,
+		&conn->s_handshake.network_order_caps,
+		SERVER_HANDSHAKE_SZ_N_CAPS);
+
+	conn->hs_rw = CLIENT_HANDSHAKE_SIZE;
+	return send_response(conn);
+}
+
+static int
+send_handshake(struct protocol_connection *const conn) {
+	ssize_t r;
 
 	r = read(conn->client_fd, conn->hs_buf+conn->hs_rw, CLIENT_HANDSHAKE_SIZE-conn->hs_rw);
 	if(r < 0) {
@@ -80,33 +113,6 @@ handshake_connection(struct protocol_connection *const conn) {
 		/* need to read more */
 		return 1;
 	}
-}
-
-static int
-respond(struct protocol_connection *const conn, uint8_t reason) {
-	conn->s_handshake.magic[0] = SERVER_HANDSHAKE_MAGIC_0;
-	conn->s_handshake.magic[1] = SERVER_HANDSHAKE_MAGIC_1;
-	conn->s_handshake.magic[2] = SERVER_HANDSHAKE_MAGIC_2;
-	conn->s_handshake.magic[3] = SERVER_HANDSHAKE_MAGIC_3;
-	conn->s_handshake.network_order_version = htons(PROTOCOL_VERSION);
-	conn->s_handshake.rejected = reason;
-	memset(&conn->s_handshake.network_order_caps, 0, sizeof(conn->s_handshake.network_order_caps));
-
-	memcpy(conn->hs_buf+SERVER_HANDSHAKE_OFF_MAGIC,
-		&conn->s_handshake.magic,
-		SERVER_HANDSHAKE_SZ_MAGIC);
-	memcpy(conn->hs_buf+SERVER_HANDSHAKE_OFF_N_VERSION,
-		&conn->s_handshake.network_order_version,
-		SERVER_HANDSHAKE_SZ_N_VERSION);
-	memcpy(conn->hs_buf+SERVER_HANDSHAKE_OFF_REJECTED,
-		&conn->s_handshake.rejected,
-		SERVER_HANDSHAKE_SZ_REJECTED);
-	memcpy(conn->hs_buf+SERVER_HANDSHAKE_OFF_N_CAPS,
-		&conn->s_handshake.network_order_caps,
-		SERVER_HANDSHAKE_SZ_N_CAPS);
-
-	conn->hs_rw = CLIENT_HANDSHAKE_SIZE;
-	return send_response(conn);
 }
 
 static int
