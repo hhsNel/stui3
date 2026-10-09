@@ -150,5 +150,8 @@ struct lp_header {
 		MESSAGE_HEADER_SIZE + MSG_PAYLOAD_MAX_LENGTH + 4, /* 4 bytes of crc32 */ \
 		LP_HEADER_SIZE)
 
+#define PROTOCOL_TCP_PORT 9099
+#define PROTOCOL_UDP_PORT 9099
+
 #endif
 

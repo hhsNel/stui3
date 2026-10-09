@@ -2,6 +2,8 @@
 #include "symbols/symbol-table.h"
 #include "core/logf.h"
 #include "serve/handle-client.h"
+#include "util.h"
+#include "stui3.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -10,24 +12,36 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/un.h>
+#include <netinet/in.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 
-static void run_server(int socket_fd, sigset_t *orig_mask);
+#define NUM_INCOMING_SOCKETS 3
+
+static int run_server(int *fds, int *connected_fds, unsigned int num_static_fds, sigset_t *orig_mask);
 static void handle_term_sig(int sig);
+static void connect_sock(struct pollfd **pfds, unsigned int *num_pfds, unsigned int *cap_pfds, struct client_context **ctxs, unsigned int *num_ctxs, unsigned int *cap_ctxs, unsigned int fd_id);
 
 static volatile sig_atomic_t running = 1;
+
+char *unix_sock_path = NULL;
+char *tcp_sock_port = NULL;
+char *udp_sock_port = NULL;
 
 int main(int argc, char **argv) {
 	unsigned int i;
 	int ret;
-	int socket_fd;
-	struct sockaddr_un socket_address;
+	int unix_socket_fd;
+	int tcp_socket_fd;
+	int udp_socket_fd;
+	struct sockaddr_un unix_socket_address;
+	struct sockaddr_in ip_socket_address;
 	struct sigaction sa;
 	sigset_t block_mask, orig_mask;
-
-	char *sock_path = NULL;
+	int valid_sockets[NUM_INCOMING_SOCKETS];
+	int connected_sockets[NUM_INCOMING_SOCKETS];
+	unsigned int num_valid_sockets;
 
 	if((ret = init_symbols()) < 0) exit(ret);
 
@@ -48,11 +62,19 @@ int main(int argc, char **argv) {
 			printf("\t%-48s %s\n", "-v | --version", "Display version information");
 			printf("\t%-48s %s\n", "-h | --help", "Display this information");
 			printf("\t%-48s %s\n", "-U <PATH> | -usock <PATH> | --unix-socket <PATH>", "Set the socket path to <PATH>");
+			printf("\t%-48s %s\n", "-t <PORT> | -tcp <PORT> | --tcp-port <PORT>", "Set the TCP port to <PATH>. Disable TCP if 0");
+			printf("\t%-48s %s\n", "-u <PORT> | -udp <PORT> | --udp-port <PORT>", "Set the UDP port to <PATH>. Disable TCP if 0");
 			ret = 0;
 			goto shutdown_symbols;
 		} else if(ARG("-U") || ARG("-usock") || ARG("--unix-socket")) {
 			ARG_CHECK;
-			sock_path = argv[++i];
+			unix_sock_path = argv[++i];
+		} else if(ARG("-t") || ARG("-tcp") || ARG("--tcp-port")) {
+			ARG_CHECK;
+			tcp_sock_port = argv[++i];
+		} else if(ARG("-u") || ARG("-udp") || ARG("--udp-port")) {
+			ARG_CHECK;
+			udp_sock_port = argv[++i];
 		} else {
 			fprintf(stderr, "Unknown option: %s\n", argv[i]);
 			ret = 1;
@@ -61,10 +83,14 @@ int main(int argc, char **argv) {
 #undef ARG
 	}
 
-	if(! sock_path) sock_path = "/tmp/stui3.sock";
+	if(! unix_sock_path) unix_sock_path = "/tmp/stui3.sock";
+	if(! tcp_sock_port) tcp_sock_port = STR(PROTOCOL_TCP_PORT);
+	if(! udp_sock_port) udp_sock_port = STR(PROTOCOL_UDP_PORT);
 
 	logf_stdout("stui3 server starting up...\n");
-	logf_stdout("The socket path is: %s\n", sock_path);
+	logf_stdout("The socket path is: %s\n", unix_sock_path);
+	logf_stdout("The TCP port is: %s\n", tcp_sock_port);
+	logf_stdout("The UDP port is: %s\n", udp_sock_port);
 
 	sa.sa_handler = handle_term_sig;
 	sa.sa_flags = 0;
@@ -106,52 +132,120 @@ int main(int argc, char **argv) {
 	}
 	logf_stdout("Signals ignored apart from ppoll\n");
 
-	if(access(sock_path, F_OK) == 0) {
-		logf_stderr("Socket path already exists: %s", sock_path);
+	if(access(unix_sock_path, F_OK) == 0) {
+		logf_stderr("Socket path already exists: %s\n", unix_sock_path);
 		ret = 1;
 		goto shutdown_symbols;
 	}
 
-	socket_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-	if(socket_fd < 0) {
-		logf_stderr("Could not open a socket: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+	unix_socket_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if(unix_socket_fd < 0) {
+		logf_stderr("Could not open a unix socket: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
 		ret = 1;
 		goto shutdown_symbols;
 	}
-	logf_stdout("Opened a socket (fd: %d)\n", socket_fd);
+	logf_stdout("Opened a unix socket (fd: %d)\n", unix_socket_fd);
 
-	memset(&socket_address, 0, sizeof(struct sockaddr_un));
-	socket_address.sun_family = AF_UNIX;
-	strncpy(socket_address.sun_path, sock_path, sizeof(socket_address.sun_path) - 1);
-	if(bind(socket_fd, (struct sockaddr *)&socket_address, sizeof(socket_address)) < 0) {
+	memset(&unix_socket_address, 0, sizeof(struct sockaddr_un));
+	unix_socket_address.sun_family = AF_UNIX;
+	strncpy(unix_socket_address.sun_path, unix_sock_path, sizeof(unix_socket_address.sun_path) - 1);
+	if(bind(unix_socket_fd, (struct sockaddr *)&unix_socket_address, sizeof(unix_socket_address)) < 0) {
 		logf_stderr("Could not bind: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		ret = 1;
 		goto shutdown_socket;
 	}
-	logf_stdout("Bound socket to path %s\n", sock_path);
+	logf_stdout("Bound unix socket to path %s\n", unix_sock_path);
+	valid_sockets[0] = unix_socket_fd;
+	connected_sockets[0] = 1;
+	num_valid_sockets = 1;
 
-	if(listen(socket_fd, SOMAXCONN) < 0) {
-		logf_stderr("Could not listen: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
-		goto shutdown_socket;
+	ret = atoi(tcp_sock_port);
+	if(ret) {
+		tcp_socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+		if(tcp_socket_fd < 0) {
+			logf_stderr("Could not open a TCP socket: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+			ret = 1;
+			goto shutdown_symbols;
+		}
+		logf_stdout("Opened a TCP socket (fd: %d)\n", tcp_socket_fd);
+
+		memset(&ip_socket_address, 0, sizeof(struct sockaddr_in));
+		ip_socket_address.sin_family = AF_INET;
+		ip_socket_address.sin_port = htons(ret);
+		ip_socket_address.sin_addr.s_addr = INADDR_ANY;
+		if(bind(tcp_socket_fd, (struct sockaddr *)&ip_socket_address, sizeof(ip_socket_address)) < 0) {
+			logf_stderr("Could not bind: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+			ret = 1;
+			goto shutdown_socket;
+		}
+		logf_stdout("Bound TCP socket to port %d\n", (int)ret);
+		valid_sockets[num_valid_sockets] = tcp_socket_fd;
+		connected_sockets[num_valid_sockets++] = 1;
+	} else {
+		tcp_socket_fd = -1;
+		logf_stdout("Not using TCP socket (port: %s)\n", tcp_sock_port);
 	}
 
-	ret = fcntl(socket_fd, F_GETFL, 0);
-	if(ret < 0) {
-		logf_stderr("Could not fnctl F_GETFL: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
-		goto shutdown_socket;
-	}
-	ret |= O_NONBLOCK;
-	if(fcntl(socket_fd, F_SETFL, ret) < 0) {
-		logf_stderr("Could not fnctl F_SETFL: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
-		goto shutdown_socket;
+	ret = atoi(udp_sock_port);
+	if(ret) {
+		udp_socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+		if(udp_socket_fd < 0) {
+			logf_stderr("Could not open a UDP socket: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+			ret = 1;
+			goto shutdown_symbols;
+		}
+		logf_stdout("Opened a UDP socket (fd: %d)\n", udp_socket_fd);
+
+		memset(&ip_socket_address, 0, sizeof(struct sockaddr_in));
+		ip_socket_address.sin_family = AF_INET;
+		ip_socket_address.sin_port = htons(ret);
+		ip_socket_address.sin_addr.s_addr = INADDR_ANY;
+		if(bind(udp_socket_fd, (struct sockaddr *)&ip_socket_address, sizeof(ip_socket_address)) < 0) {
+			logf_stderr("Could not bind: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+			ret = 1;
+			goto shutdown_socket;
+		}
+		logf_stdout("Bound UDP socket to port %d\n", (int)ret);
+		valid_sockets[num_valid_sockets] = udp_socket_fd;
+		connected_sockets[num_valid_sockets++] = 0;
+	} else {
+		udp_socket_fd = -1;
+		logf_stdout("Not using UDP socket (port: %s)\n", udp_sock_port);
 	}
 
-	run_server(socket_fd, &orig_mask);
+	logf_stdout("There are %u valid sockets\n", num_valid_sockets);
 
-	ret = 0;
+	for(i = 0; i < num_valid_sockets; ++i) {
+		if(connected_sockets[i]) {
+			if(listen(valid_sockets[i], SOMAXCONN) < 0) {
+				logf_stderr("Could not listen to socket %u: %s (%s)\n", i, strerrordesc_np(errno), strerrorname_np(errno));
+				ret = 1;
+				goto shutdown_socket;
+			}
+		}
+	}
+
+	for(i = 0; i < num_valid_sockets; ++i) {
+		ret = fcntl(valid_sockets[i], F_GETFL, 0);
+		if(ret < 0) {
+			logf_stderr("Could not fnctl F_GETFL: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+			ret = 1;
+			goto shutdown_socket;
+		}
+		ret |= O_NONBLOCK;
+		if(fcntl(valid_sockets[i], F_SETFL, ret) < 0) {
+			logf_stderr("Could not fnctl F_SETFL: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+			ret = 1;
+			goto shutdown_socket;
+		}
+	}
+
+	ret = run_server(valid_sockets, connected_sockets, num_valid_sockets, &orig_mask);
+
 shutdown_socket:
 	logf_stdout("Shutting down the socket\n");
-	unlink(sock_path);
-	close(socket_fd);
+	unlink(unix_sock_path);
+	close(unix_socket_fd);
 
 shutdown_symbols:
 	logf_stdout("Shutting down symbol resolution\n");
@@ -159,45 +253,46 @@ shutdown_symbols:
 	return ret;
 }
 
-static void
-run_server(int socket_fd, sigset_t *orig_mask) {
-	struct pollfd *pfds, *new_pfds;
+static int
+run_server(int *fds, int *connected_fds, unsigned int num_static_fds, sigset_t *orig_mask) {
+	struct pollfd *pfds;
 	unsigned int num_pfds, cap_pfds;
-	int client_fd;
 	unsigned int i;
-	struct client_context *ctxs, *new_ctxs;
+	struct client_context *ctxs;
 	unsigned int num_ctxs, cap_ctxs;
 	int ret;
 
-	cap_pfds = 16;
+	cap_pfds = num_static_fds + 16;
 	pfds = malloc(cap_pfds * sizeof(struct pollfd));
 	if(! pfds) {
 		logf_stderr("Could not malloc pollfds: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
-		return;
+		return -STUI3_EUPSTM;
 	}
 	
 	cap_ctxs = 16;
 	ctxs = malloc(cap_ctxs * sizeof(struct client_context));
 	if(! ctxs) {
 		logf_stderr("Could not malloc ctxs: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
-		return;
+		return -STUI3_EUPSTM;
 	}
 	num_ctxs = 0;
 
-	pfds[0].fd = socket_fd;
-	pfds[0].events = POLLIN;
-	num_pfds = 1;
+	for(i = 0; i < num_static_fds; ++i) {
+		pfds[i].fd = fds[i];
+		pfds[i].events = POLLIN;
+	}
+	num_pfds = num_static_fds;
 
 	while(running) {
 		if(ppoll(pfds, num_pfds, NULL, orig_mask) > 0) {
-			for(i = 1; i < num_pfds; ++i) {
+			for(i = num_static_fds; i < num_pfds; ++i) {
 				if(pfds[i].revents & (POLLIN | POLLOUT)) {
 					/* handle client */
-					ret = handle_client(&ctxs[i - 1]);
+					ret = handle_client(&ctxs[i - num_static_fds]);
 #define CLEANUP do { \
 		close(pfds[i].fd); \
-		memcpy(&pfds[i],   &pfds[num_pfds-1], sizeof(struct pollfd)); \
-		memcpy(&ctxs[i-1], &ctxs[num_ctxs-1], sizeof(struct client_context)); \
+		memcpy(&pfds[i],   &pfds[num_pfds-num_static_fds], sizeof(struct pollfd)); \
+		memcpy(&ctxs[i-num_static_fds], &ctxs[num_ctxs], sizeof(struct client_context)); \
 		--num_pfds; \
 		--num_ctxs; \
 		--i; \
@@ -212,61 +307,76 @@ run_server(int socket_fd, sigset_t *orig_mask) {
 					}
 				}
 			}
-			if(pfds[0].revents & POLLIN) {
-				/* accept socket */
-				client_fd = accept(socket_fd, NULL, NULL);
-				if(client_fd >= 0) {
-					if(num_pfds == cap_pfds) {
-						cap_pfds *= 2;
-						new_pfds = realloc(pfds, cap_pfds * sizeof(struct pollfd));
-						if(! new_pfds) {
-							logf_stderr("Could not realloc pollfds: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
-							cap_pfds /= 2;
-							close(client_fd);
-							continue;
-						}
-						pfds = new_pfds;
-					}
-					if(num_ctxs == cap_ctxs) {
-						cap_ctxs *= 2;
-						new_ctxs = realloc(ctxs, cap_ctxs * sizeof(struct client_context));
-						if(! new_ctxs) {
-							logf_stderr("Could not realloc ctxs: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
-							cap_ctxs /= 2;
-							close(client_fd);
-							continue;
-						}
-						ctxs = new_ctxs;
-					}
-					pfds[num_pfds].fd = client_fd;
-					if((ret = fcntl(client_fd, F_GETFL, 0)) >= 0) {
-						if(fcntl(client_fd, F_SETFL, ret | O_NONBLOCK) >= 0) {
-							pfds[num_pfds].events = POLLIN | POLLOUT;
-							++num_pfds;
-							init_client_context(client_fd, &ctxs[num_ctxs]);
-							++num_ctxs;
-						} else {
-							logf_stderr("Could not fcntl F_SETFL client_fd: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
-							close(client_fd);
-						}
-					} else {
-						logf_stderr("Could not fcntl F_GETFL client_fd: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
-						close(client_fd);
-					}
-				} else {
-					logf_stderr("Could not accept client_fd: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
-				}
+			for(i = 0; i < num_static_fds; ++i) {
+				/* TODO: connected fds */
+				(void)connected_fds;
+				connect_sock(&pfds, &num_pfds, &cap_pfds, &ctxs, &num_ctxs, &cap_ctxs, i);
 			}
 		}
 	}
 
 	free(pfds);
 	free(ctxs);
+	return 0;
 }
 
 static void
 handle_term_sig(int sig) {
 	(void)sig;
 	running = 0;
+}
+
+static void
+connect_sock(struct pollfd **pfds, unsigned int *num_pfds, unsigned int *cap_pfds, struct client_context **ctxs, unsigned int *num_ctxs, unsigned int *cap_ctxs, unsigned int fd_id) {
+	struct pollfd *new_pfds;
+	struct client_context *new_ctxs;
+	int client_fd;
+	int ret;
+
+	if((*pfds)[fd_id].revents & POLLIN) {
+		/* accept socket */
+		client_fd = accept((*pfds)[fd_id].fd, NULL, NULL);
+		if(client_fd >= 0) {
+			if(*num_pfds == *cap_pfds) {
+				*cap_pfds *= 2;
+				new_pfds = realloc(*pfds, *cap_pfds * sizeof(struct pollfd));
+				if(! new_pfds) {
+					logf_stderr("Could not realloc pollfds: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+					*cap_pfds /= 2;
+					close(client_fd);
+					return;
+				}
+				*pfds = new_pfds;
+			}
+			if(*num_ctxs == *cap_ctxs) {
+				*cap_ctxs *= 2;
+				new_ctxs = realloc(*ctxs, *cap_ctxs * sizeof(struct client_context));
+				if(! new_ctxs) {
+					logf_stderr("Could not realloc ctxs: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+					*cap_ctxs /= 2;
+					close(client_fd);
+					return;
+				}
+				*ctxs = new_ctxs;
+			}
+			(*pfds)[*num_pfds].fd = client_fd;
+			if((ret = fcntl(client_fd, F_GETFL, 0)) >= 0) {
+				if(fcntl(client_fd, F_SETFL, ret | O_NONBLOCK) >= 0) {
+					(*pfds)[*num_pfds].events = POLLIN | POLLOUT;
+					++*num_pfds;
+					init_client_context(client_fd, &(*ctxs)[*num_ctxs]);
+					++*num_ctxs;
+				} else {
+					logf_stderr("Could not fcntl F_SETFL client_fd: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+					close(client_fd);
+				}
+			} else {
+				logf_stderr("Could not fcntl F_GETFL client_fd: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+				close(client_fd);
+			}
+		} else {
+			logf_stderr("Could not accept client_fd: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		}
+	}
 }
 

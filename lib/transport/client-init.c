@@ -67,6 +67,7 @@ send_client_handshake(int const sock_fd) {
 			if(errno == EINTR) continue;
 			else if(errno == EAGAIN || errno == EWOULDBLOCK) {
 				poll(&pfd, 1, -1);
+				continue;
 			}
 			else return -STUI3_EUPSTM;
 		}

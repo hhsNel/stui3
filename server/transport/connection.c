@@ -9,7 +9,7 @@
 #include <errno.h>
 
 static int respond(struct protocol_connection *const conn, uint8_t reason);
-static int send_handshake(struct protocol_connection *const conn);
+static int read_handshake(struct protocol_connection *const conn);
 static int send_response(struct protocol_connection *const conn);
 static uint16_t identity16(uint16_t host);
 static uint32_t identity32(uint32_t host);
@@ -28,7 +28,7 @@ int
 handshake_connection(struct protocol_connection *const conn) {
 	if(conn->hs_rw >= CLIENT_HANDSHAKE_SIZE) return send_response(conn);
 
-	return send_handshake(conn);
+	return read_handshake(conn);
 }
 
 static int
@@ -59,7 +59,7 @@ respond(struct protocol_connection *const conn, uint8_t reason) {
 }
 
 static int
-send_handshake(struct protocol_connection *const conn) {
+read_handshake(struct protocol_connection *const conn) {
 	ssize_t r;
 
 	r = read(conn->client_fd, conn->hs_buf+conn->hs_rw, CLIENT_HANDSHAKE_SIZE-conn->hs_rw);
