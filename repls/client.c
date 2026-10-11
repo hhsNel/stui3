@@ -35,7 +35,8 @@ int main() {
 	while(1) {
 		fgets(buf, sizeof(buf), stdin);
 		if(buf[0] == '\n') break;
-		head.payload_sz = strlen(buf) + 1;
+		head.payload_sz = strlen(buf);
+		if(head.payload_sz) buf[head.payload_sz-1] = '\0';
 		printf("send_msg: %d\n", send_msg(&tp, head, (uint8_t *)buf));
 		tick_protocol(&tp);
 		printf("run_transport_protocol: %d\n", run_transport_protocol(&tp));

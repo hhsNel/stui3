@@ -76,7 +76,7 @@ int main() {
 			}
 			minfo.export_arg = 0;
 		} else if(strncmp(buf, "command", 7) == 0) {
-			sscanf(buf, "command %d %63s", &argi, arg);
+			sscanf(buf, "command %d %63[^\r\n]%*[\r\n]", &argi, arg);
 			printf("ok %d\n", module_command(argi, arg, desc_buf, sizeof(desc_buf)));
 			printf("feedback: %s\n", desc_buf);
 		} else {

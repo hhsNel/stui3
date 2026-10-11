@@ -13,15 +13,24 @@
 #include <errno.h>
 #include <sys/un.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 
 #define NUM_INCOMING_SOCKETS 3
 
-static int run_server(int *fds, int *connected_fds, unsigned int num_static_fds, sigset_t *orig_mask);
+struct sockdescr {
+	int fd;
+	int (*accept)(struct sockdescr *sd);
+};
+
+static int run_server(struct sockdescr *static_socks, unsigned int num_static_fds, sigset_t *orig_mask);
 static void handle_term_sig(int sig);
-static void connect_sock(struct pollfd **pfds, unsigned int *num_pfds, unsigned int *cap_pfds, struct client_context **ctxs, unsigned int *num_ctxs, unsigned int *cap_ctxs, unsigned int fd_id);
+static void connect_sock(struct sockdescr *static_socks, struct pollfd **pfds, unsigned int *num_pfds, unsigned int *cap_pfds, struct client_context **ctxs, unsigned int *num_ctxs, unsigned int *cap_ctxs, unsigned int fd_id);
+static int accept_tcp(struct sockdescr *sd);
+static int accept_udp(struct sockdescr *sd);
+static int accept_unix(struct sockdescr *sd);
 
 static volatile sig_atomic_t running = 1;
 
@@ -39,9 +48,9 @@ int main(int argc, char **argv) {
 	struct sockaddr_in ip_socket_address;
 	struct sigaction sa;
 	sigset_t block_mask, orig_mask;
-	int valid_sockets[NUM_INCOMING_SOCKETS];
-	int connected_sockets[NUM_INCOMING_SOCKETS];
+	struct sockdescr valid_sockets[NUM_INCOMING_SOCKETS];
 	unsigned int num_valid_sockets;
+	int one;
 
 	if((ret = init_symbols()) < 0) exit(ret);
 
@@ -155,8 +164,14 @@ int main(int argc, char **argv) {
 		goto shutdown_socket;
 	}
 	logf_stdout("Bound unix socket to path %s\n", unix_sock_path);
-	valid_sockets[0] = unix_socket_fd;
-	connected_sockets[0] = 1;
+
+	if(listen(unix_socket_fd, SOMAXCONN) < 0) {
+		logf_stderr("Could not listen to socket: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+		ret = 1;
+		goto shutdown_socket;
+	}
+	valid_sockets[0].fd = unix_socket_fd;
+	valid_sockets[0].accept = accept_unix;
 	num_valid_sockets = 1;
 
 	ret = atoi(tcp_sock_port);
@@ -179,8 +194,13 @@ int main(int argc, char **argv) {
 			goto shutdown_socket;
 		}
 		logf_stdout("Bound TCP socket to port %d\n", (int)ret);
-		valid_sockets[num_valid_sockets] = tcp_socket_fd;
-		connected_sockets[num_valid_sockets++] = 1;
+		if(listen(tcp_socket_fd, SOMAXCONN) < 0) {
+			logf_stderr("Could not listen to socket: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
+			ret = 1;
+			goto shutdown_socket;
+		}
+		valid_sockets[num_valid_sockets].fd = tcp_socket_fd;
+		valid_sockets[num_valid_sockets++].accept = accept_tcp;
 	} else {
 		tcp_socket_fd = -1;
 		logf_stdout("Not using TCP socket (port: %s)\n", tcp_sock_port);
@@ -205,9 +225,18 @@ int main(int argc, char **argv) {
 			ret = 1;
 			goto shutdown_socket;
 		}
+		one = 1;
+		if(setsockopt(udp_socket_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0) {
+			close(udp_socket_fd);
+			return -1;
+		}
+		if(setsockopt(udp_socket_fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) < 0) {
+			close(udp_socket_fd);
+			return -1;
+		}
 		logf_stdout("Bound UDP socket to port %d\n", (int)ret);
-		valid_sockets[num_valid_sockets] = udp_socket_fd;
-		connected_sockets[num_valid_sockets++] = 0;
+		valid_sockets[num_valid_sockets].fd = udp_socket_fd;
+		valid_sockets[num_valid_sockets++].accept = accept_udp;
 	} else {
 		udp_socket_fd = -1;
 		logf_stdout("Not using UDP socket (port: %s)\n", udp_sock_port);
@@ -216,36 +245,28 @@ int main(int argc, char **argv) {
 	logf_stdout("There are %u valid sockets\n", num_valid_sockets);
 
 	for(i = 0; i < num_valid_sockets; ++i) {
-		if(connected_sockets[i]) {
-			if(listen(valid_sockets[i], SOMAXCONN) < 0) {
-				logf_stderr("Could not listen to socket %u: %s (%s)\n", i, strerrordesc_np(errno), strerrorname_np(errno));
-				ret = 1;
-				goto shutdown_socket;
-			}
-		}
-	}
-
-	for(i = 0; i < num_valid_sockets; ++i) {
-		ret = fcntl(valid_sockets[i], F_GETFL, 0);
+		ret = fcntl(valid_sockets[i].fd, F_GETFL, 0);
 		if(ret < 0) {
 			logf_stderr("Could not fnctl F_GETFL: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
 			ret = 1;
 			goto shutdown_socket;
 		}
 		ret |= O_NONBLOCK;
-		if(fcntl(valid_sockets[i], F_SETFL, ret) < 0) {
+		if(fcntl(valid_sockets[i].fd, F_SETFL, ret) < 0) {
 			logf_stderr("Could not fnctl F_SETFL: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
 			ret = 1;
 			goto shutdown_socket;
 		}
 	}
 
-	ret = run_server(valid_sockets, connected_sockets, num_valid_sockets, &orig_mask);
+	ret = run_server(valid_sockets, num_valid_sockets, &orig_mask);
 
 shutdown_socket:
 	logf_stdout("Shutting down the socket\n");
 	unlink(unix_sock_path);
 	close(unix_socket_fd);
+	if(tcp_socket_fd >= 0) close(tcp_socket_fd);
+	if(udp_socket_fd >= 0) close(udp_socket_fd);
 
 shutdown_symbols:
 	logf_stdout("Shutting down symbol resolution\n");
@@ -254,7 +275,7 @@ shutdown_symbols:
 }
 
 static int
-run_server(int *fds, int *connected_fds, unsigned int num_static_fds, sigset_t *orig_mask) {
+run_server(struct sockdescr *static_socks, unsigned int num_static_fds, sigset_t *orig_mask) {
 	struct pollfd *pfds;
 	unsigned int num_pfds, cap_pfds;
 	unsigned int i;
@@ -278,7 +299,7 @@ run_server(int *fds, int *connected_fds, unsigned int num_static_fds, sigset_t *
 	num_ctxs = 0;
 
 	for(i = 0; i < num_static_fds; ++i) {
-		pfds[i].fd = fds[i];
+		pfds[i].fd = static_socks[i].fd;
 		pfds[i].events = POLLIN;
 	}
 	num_pfds = num_static_fds;
@@ -309,8 +330,7 @@ run_server(int *fds, int *connected_fds, unsigned int num_static_fds, sigset_t *
 			}
 			for(i = 0; i < num_static_fds; ++i) {
 				/* TODO: connected fds */
-				(void)connected_fds;
-				connect_sock(&pfds, &num_pfds, &cap_pfds, &ctxs, &num_ctxs, &cap_ctxs, i);
+				connect_sock(static_socks, &pfds, &num_pfds, &cap_pfds, &ctxs, &num_ctxs, &cap_ctxs, i);
 			}
 		}
 	}
@@ -327,7 +347,7 @@ handle_term_sig(int sig) {
 }
 
 static void
-connect_sock(struct pollfd **pfds, unsigned int *num_pfds, unsigned int *cap_pfds, struct client_context **ctxs, unsigned int *num_ctxs, unsigned int *cap_ctxs, unsigned int fd_id) {
+connect_sock(struct sockdescr *static_socks, struct pollfd **pfds, unsigned int *num_pfds, unsigned int *cap_pfds, struct client_context **ctxs, unsigned int *num_ctxs, unsigned int *cap_ctxs, unsigned int fd_id) {
 	struct pollfd *new_pfds;
 	struct client_context *new_ctxs;
 	int client_fd;
@@ -335,7 +355,7 @@ connect_sock(struct pollfd **pfds, unsigned int *num_pfds, unsigned int *cap_pfd
 
 	if((*pfds)[fd_id].revents & POLLIN) {
 		/* accept socket */
-		client_fd = accept((*pfds)[fd_id].fd, NULL, NULL);
+		client_fd = static_socks[fd_id].accept(&static_socks[fd_id]);
 		if(client_fd >= 0) {
 			if(*num_pfds == *cap_pfds) {
 				*cap_pfds *= 2;
@@ -378,5 +398,77 @@ connect_sock(struct pollfd **pfds, unsigned int *num_pfds, unsigned int *cap_pfd
 			logf_stderr("Could not accept client_fd: %s (%s)\n", strerrordesc_np(errno), strerrorname_np(errno));
 		}
 	}
+}
+
+static int
+accept_tcp(struct sockdescr *sd) {
+	int fd;
+	int one;
+
+	fd = accept4(sd->fd, NULL, NULL, SOCK_CLOEXEC);
+	if(fd < 0) {
+		return fd;
+	}
+	one = 1;
+	if(setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) < 0) {
+		close(fd);
+		return -1;
+	}
+	logf_stdout("Accepting a connection over a tcp socket\n");
+	return fd;
+}
+
+static int
+accept_udp(struct sockdescr *sd) {
+	struct sockaddr_storage peer, local;
+	socklen_t peer_sz, local_sz;
+	int fd;
+	int one;
+
+	peer_sz = sizeof(peer);
+	if(recvfrom(sd->fd, NULL, 0, MSG_PEEK, (struct sockaddr *)&peer, &peer_sz) < 0) {
+		return -1;
+	}
+	local_sz = sizeof(local);
+	if(getsockname(sd->fd, (struct sockaddr *)&local, &local_sz) < 0) {
+		return -1;
+	}
+
+	fd = socket(local.ss_family, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+	if(fd < 0) {
+		return fd;
+	}
+
+	one = 1;
+	if(setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0) {
+		close(fd);
+		return -1;
+	}
+	if(setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) < 0) {
+		close(fd);
+		return -1;
+	}
+	if(bind(fd, (struct sockaddr *)&local, local_sz) < 0) {
+		close(fd);
+		return -1;
+	}
+	if(connect(fd, (struct sockaddr *)&peer, peer_sz) < 0) {
+		close(fd);
+		return -1;
+	}
+	
+	logf_stdout("Accepting a connection over a udp socket\n");
+	return fd;
+}
+
+static int
+accept_unix(struct sockdescr *sd) {
+	int fd;
+
+	fd = accept4(sd->fd, NULL, NULL, SOCK_CLOEXEC);
+	if(fd >= 0) {
+		logf_stdout("Accepting a connection over a unix socket\n");
+	}
+	return fd;
 }
 
