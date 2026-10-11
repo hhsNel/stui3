@@ -1,5 +1,7 @@
 #include "child.h"
 
+#include "core/setup-daemon.h"
+
 #include "commands.h"
 #include "fd-all.h"
 
@@ -14,6 +16,7 @@
 enum write_target_type {
 	WT_TYPE_FD,
 	WT_TYPE_SYSLOG,
+	WT_TYPE_CTTY,
 };
 
 struct write_target {
@@ -39,8 +42,8 @@ STUI3_MODULE_NAME(forward)(int stdout_fd, int stderr_fd) {
 	int ret;
 	struct STUI3_MODULE_NAME(command) cmd;
 	struct STUI3_MODULE_NAME(command_response) resp;
-	struct write_designator wd_out = { "[OUT] ", { {.type=WT_TYPE_FD,.data.fd=STDOUT_FILENO} }, 1 };
-	struct write_designator wd_err = { "[ERR] ", { {.type=WT_TYPE_FD,.data.fd=STDERR_FILENO} }, 1 };
+	struct write_designator wd_out = { "[OUT] ", { {.type=WT_TYPE_CTTY} }, 1 };
+	struct write_designator wd_err = { "[ERR] ", { {.type=WT_TYPE_CTTY} }, 1 };
 	struct write_designator *modified_wd;
 	unsigned int closed = 0;
 
@@ -82,8 +85,8 @@ STUI3_MODULE_NAME(forward)(int stdout_fd, int stderr_fd) {
 				resp.reason[0] = '\0';
 				if(STUI3_MODULE_NAME(write_all)(cmd_sock_fd, &resp, sizeof(resp)) < 0) return;
 				exit(0);
-			} else if(strncmp(buf, "tgt_out ", 8) == 0 || strncmp(buf, "tgt_err ", 8) == 0) {
-				if(strncmp(buf, "tgt_out ", 8) == 0) modified_wd = &wd_out;
+			} else if(strncmp(cmd.string, "tgt_out ", 8) == 0 || strncmp(cmd.string, "tgt_err ", 8) == 0) {
+				if(strncmp(cmd.string, "tgt_out ", 8) == 0) modified_wd = &wd_out;
 				else modified_wd = &wd_err;
 
 				if(modified_wd->num_targets >= sizeof(modified_wd->tgts)/sizeof(*modified_wd->tgts)) {
@@ -92,15 +95,20 @@ STUI3_MODULE_NAME(forward)(int stdout_fd, int stderr_fd) {
 					if(STUI3_MODULE_NAME(write_all)(cmd_sock_fd, &resp, sizeof(resp)) < 0) return;
 				}
 
-				if(strncmp(buf+8, "fd ", 2) == 0) {
-					modified_wd->tgts[modified_wd->num_targets++] = (struct write_target){WT_TYPE_FD,{.fd=atoi(buf+11)}};
+				if(strncmp(cmd.string+8, "fd ", 2) == 0) {
+					modified_wd->tgts[modified_wd->num_targets++] = (struct write_target){WT_TYPE_FD,{.fd=atoi(cmd.string+11)}};
 					resp.rv = 0;
-					snprintf(resp.reason, sizeof(resp.reason), "Target set to fd %d", atoi(buf+10));
+					snprintf(resp.reason, sizeof(resp.reason), "Target set to fd %d", atoi(cmd.string+10));
 					if(STUI3_MODULE_NAME(write_all)(cmd_sock_fd, &resp, sizeof(resp)) < 0) return;
-				} else if(strncmp(buf+8, "syslog ", 7) == 0) {
-					modified_wd->tgts[modified_wd->num_targets++] = (struct write_target){WT_TYPE_SYSLOG, {.log_type=(buf[15]=='o'?LOG_INFO:LOG_ERR)}};
+				} else if(strncmp(cmd.string+8, "syslog ", 7) == 0) {
+					modified_wd->tgts[modified_wd->num_targets++] = (struct write_target){WT_TYPE_SYSLOG, {.log_type=(cmd.string[15]=='o'?LOG_INFO:LOG_ERR)}};
 					resp.rv = 0;
-					snprintf(resp.reason, sizeof(resp.reason), "Target set to syslog level %s", buf[15]=='o'?"LOG_INFO":"LOG_ERR");
+					snprintf(resp.reason, sizeof(resp.reason), "Target set to syslog level %s", cmd.string[15]=='o'?"LOG_INFO":"LOG_ERR");
+					if(STUI3_MODULE_NAME(write_all)(cmd_sock_fd, &resp, sizeof(resp)) < 0) return;
+				} else if(strncmp(cmd.string+8, "ctty", 4) == 0) {
+					modified_wd->tgts[modified_wd->num_targets++] = (struct write_target){.type=WT_TYPE_CTTY};
+					resp.rv = 0;
+					snprintf(resp.reason, sizeof(resp.reason), "Target set to the controlling terminal");
 					if(STUI3_MODULE_NAME(write_all)(cmd_sock_fd, &resp, sizeof(resp)) < 0) return;
 				} else {
 					resp.rv = 1;
@@ -145,6 +153,10 @@ handle_write(struct write_designator *wd, char *buf, size_t sz) {
 			break;
 		case WT_TYPE_SYSLOG:
 			syslog(wd->tgts[i].data.log_type, "%s%.*s", wd->prefix, (int)sz, buf);
+			break;
+		case WT_TYPE_CTTY:
+			STUI3_MODULE_NAME(write_all)(ctty_fd, wd->prefix, strlen(wd->prefix));
+			STUI3_MODULE_NAME(write_all)(ctty_fd, buf, sz);
 			break;
 		}
 	}

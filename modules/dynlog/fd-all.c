@@ -10,8 +10,8 @@ STUI3_MODULE_NAME(write_all)(int fd, void const *buf, size_t sz) {
 
 	retries = 8;
 	while(sz > 0) {
-		if((ret = write(fd, buf, sz)) < 0 && errno == EINTR) {
-			if(retries--) continue;
+		if((ret = write(fd, buf, sz)) < 0) {
+			if(errno == EINTR && retries--) continue;
 			else return -1;
 		}
 		if(ret == 0) return -1;
@@ -29,8 +29,8 @@ STUI3_MODULE_NAME(read_expected)(int fd, void *buf, size_t sz) {
 
 	retries = 8;
 	while(sz > 0) {
-		if((ret = read(fd, buf, sz)) < 0 && errno == EINTR) {
-			if(retries--) continue;
+		if((ret = read(fd, buf, sz)) < 0) {
+			if(errno == EINTR && retries--) continue;
 			else return -1;
 		}
 		if(ret == 0) return -1;

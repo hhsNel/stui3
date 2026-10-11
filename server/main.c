@@ -37,6 +37,7 @@ static volatile sig_atomic_t running = 1;
 char *unix_sock_path = NULL;
 char *tcp_sock_port = NULL;
 char *udp_sock_port = NULL;
+int daemonize = 0;
 
 int main(int argc, char **argv) {
 	unsigned int i;
@@ -52,19 +53,15 @@ int main(int argc, char **argv) {
 	unsigned int num_valid_sockets;
 	int one;
 
-	if((ret = init_symbols()) < 0) exit(ret);
-
 	for(i = 1; i < (unsigned int)argc; ++i) {
 #define ARG(STR) (strcmp(argv[i], STR) == 0)
-#define ARG_CHECK do { if(i + 1 >= (unsigned int)argc) {fprintf(stderr, "Expected another argument after %s\n", argv[i]); ret = 1; goto shutdown_symbols;} } while(0);
+#define ARG_CHECK do { if(i + 1 >= (unsigned int)argc) {fprintf(stderr, "Expected another argument after %s\n", argv[i]); exit(1); } } while(0);
 		if(argv[i][0] != '-') {
 			fprintf(stderr, "Expected a flag, got: %s\n", argv[i]);
-			ret = 1;
-			goto shutdown_symbols;
+			exit(1);
 		} else if(ARG("-v") || ARG("--version")) {
 			printf("stui3 server\nABI version: %d\n", (int)ABI_VERSION);
-			ret = 0;
-			goto shutdown_symbols;
+			exit(0);
 		} else if(ARG("-h") || ARG("--help")) {
 			printf("%s [options...]\n", argv[0]);
 			printf("Options:\n");
@@ -73,8 +70,9 @@ int main(int argc, char **argv) {
 			printf("\t%-48s %s\n", "-U <PATH> | -usock <PATH> | --unix-socket <PATH>", "Set the socket path to <PATH>");
 			printf("\t%-48s %s\n", "-t <PORT> | -tcp <PORT> | --tcp-port <PORT>", "Set the TCP port to <PATH>. Disable TCP if 0");
 			printf("\t%-48s %s\n", "-u <PORT> | -udp <PORT> | --udp-port <PORT>", "Set the UDP port to <PATH>. Disable TCP if 0");
-			ret = 0;
-			goto shutdown_symbols;
+			printf("\t%-48s %s\n", "-d | -daemon | --daemonize", "Daemonize (default: fg/no-daemonize)");
+			printf("\t%-48s %s\n", "-D | -fg | --no-daemonize", "Don't daemonize (default: fg/no-daemonize)");
+			exit(0);
 		} else if(ARG("-U") || ARG("-usock") || ARG("--unix-socket")) {
 			ARG_CHECK;
 			unix_sock_path = argv[++i];
@@ -84,13 +82,22 @@ int main(int argc, char **argv) {
 		} else if(ARG("-u") || ARG("-udp") || ARG("--udp-port")) {
 			ARG_CHECK;
 			udp_sock_port = argv[++i];
+		} else if(ARG("-d") || ARG("-bg") || ARG("--daemonize")) {
+			daemonize = 1;
+		} else if(ARG("-D") || ARG("-fg") || ARG("--no-daemonize")) {
+			daemonize = 0;
 		} else {
 			fprintf(stderr, "Unknown option: %s\n", argv[i]);
-			ret = 1;
-			goto shutdown_symbols;
+			exit(1);
 		}
 #undef ARG
 	}
+
+	if(daemonize) {
+		become_daemon();
+	}
+
+	if((ret = init_symbols()) < 0) exit(ret);
 
 	if(! unix_sock_path) unix_sock_path = "/tmp/stui3.sock";
 	if(! tcp_sock_port) tcp_sock_port = STR(PROTOCOL_TCP_PORT);
